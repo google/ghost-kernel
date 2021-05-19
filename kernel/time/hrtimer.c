@@ -1466,7 +1466,7 @@ static int __sched do_nanosleep(struct hrtimer_sleeper *t, enum hrtimer_mode mod
 	hrtimer_init_sleeper(t, current);
 
 	do {
-		set_current_state(TASK_INTERRUPTIBLE);
+		set_current_state(TASK_INTERRUPTIBLE|__TASK_DEFERRABLE_WAKEUP);
 		hrtimer_start_expires(&t->timer, mode);
 
 		if (likely(t->task))

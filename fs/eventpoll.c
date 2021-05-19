@@ -1787,7 +1787,7 @@ fetch_events:
 			 * a wakeup in between. That's why we set the task state
 			 * to TASK_INTERRUPTIBLE before doing the checks.
 			 */
-			set_current_state(TASK_INTERRUPTIBLE);
+			set_current_state(TASK_INTERRUPTIBLE|__TASK_DEFERRABLE_WAKEUP);
 			/*
 			 * Always short-circuit for fatal signals to allow
 			 * threads to make a timely exit without the chance of

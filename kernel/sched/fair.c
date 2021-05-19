@@ -5466,7 +5466,8 @@ static void cpu_load_update(struct rq *this_rq, unsigned long this_load,
 /* Used instead of source_load when we know the type == 0 */
 static unsigned long weighted_cpuload(struct rq *rq)
 {
-	return cfs_rq_runnable_load_avg(&rq->cfs);
+	return cfs_rq_runnable_load_avg(&rq->cfs) +
+	       ghost_cfs_added_load(rq);
 }
 
 #ifdef CONFIG_NO_HZ_COMMON
@@ -6732,6 +6733,10 @@ done: __maybe_unused
 	return p;
 
 idle:
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (skip_fair_idle_balance(cfs_rq, prev))
+		return NULL;
+#endif
 	new_tasks = idle_balance(rq, rf);
 
 	/*
@@ -7209,7 +7214,8 @@ static int detach_tasks(struct lb_env *env)
 		 * We don't want to steal all, otherwise we may be treated likewise,
 		 * which could at worst lead to a livelock crash.
 		 */
-		if (env->idle != CPU_NOT_IDLE && env->src_rq->nr_running <= 1)
+		if (env->idle != CPU_NOT_IDLE &&
+		    rq_adj_nr_running(env->src_rq) <= 1)
 			break;
 
 		p = list_last_entry(tasks, struct task_struct, se.group_node);
@@ -7804,7 +7810,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 		sgs->group_util += cpu_util(i);
 		sgs->sum_nr_running += rq->cfs.h_nr_running;
 
-		nr_running = rq->nr_running;
+		nr_running = rq_adj_nr_running(rq);
 		if (nr_running > 1)
 			*overload = true;
 
@@ -8352,7 +8358,7 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 		 * which is not scaled with the cpu capacity.
 		 */
 
-		if (rq->nr_running == 1 && wl > env->imbalance &&
+		if (rq_adj_nr_running(rq) == 1 && wl > env->imbalance &&
 		    !check_cpu_capacity(rq, env->sd))
 			continue;
 
@@ -8512,7 +8518,7 @@ redo:
 	env.src_rq = busiest;
 
 	ld_moved = 0;
-	if (busiest->nr_running > 1) {
+	if (rq_adj_nr_running(busiest) > 1) {
 		/*
 		 * Attempt to move tasks. If find_busiest_group has found
 		 * an imbalance but busiest->nr_running <= 1, the group is
@@ -8520,7 +8526,8 @@ redo:
 		 * correctly treated as an imbalance.
 		 */
 		env.flags |= LBF_ALL_PINNED;
-		env.loop_max  = min(sysctl_sched_nr_migrate, busiest->nr_running);
+		env.loop_max  = min(sysctl_sched_nr_migrate,
+				    rq_adj_nr_running(busiest));
 
 more_balance:
 		rq_lock_irqsave(busiest, &rf);
@@ -8829,7 +8836,7 @@ static int idle_balance(struct rq *this_rq, struct rq_flags *rf)
 		 * Stop searching for tasks to pull if there are
 		 * now runnable tasks on this rq.
 		 */
-		if (pulled_task || this_rq->nr_running > 0)
+		if (pulled_task || rq_adj_nr_running(this_rq) > 0)
 			break;
 	}
 	rcu_read_unlock();
@@ -8853,7 +8860,7 @@ out:
 		this_rq->next_balance = next_balance;
 
 	/* Is there a task of a high priority class? */
-	if (this_rq->nr_running != this_rq->cfs.h_nr_running)
+	if (rq_adj_nr_running(this_rq) != this_rq->cfs.h_nr_running)
 		pulled_task = -1;
 
 	if (pulled_task)
@@ -8895,7 +8902,7 @@ static int active_load_balance_cpu_stop(void *data)
 		goto out_unlock;
 
 	/* Is there any task to move? */
-	if (busiest_rq->nr_running <= 1)
+	if (rq_adj_nr_running(busiest_rq) <= 1)
 		goto out_unlock;
 
 	/*
@@ -9313,7 +9320,7 @@ static inline bool nohz_kick_needed(struct rq *rq)
 	if (time_before(now, nohz.next_balance))
 		return false;
 
-	if (rq->nr_running >= 2)
+	if (rq_adj_nr_running(rq) >= 2)
 		return true;
 
 	rcu_read_lock();
@@ -9893,7 +9900,11 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
  * All the scheduling class methods:
  */
 const struct sched_class fair_sched_class = {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	.next			= &ghost_sched_class,
+#else
 	.next			= &idle_sched_class,
+#endif
 	.enqueue_task		= enqueue_task_fair,
 	.dequeue_task		= dequeue_task_fair,
 	.yield_task		= yield_task_fair,

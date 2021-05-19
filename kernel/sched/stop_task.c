@@ -111,7 +111,11 @@ static void update_curr_stop(struct rq *rq)
  * Simple, special scheduling class for the per-CPU stop tasks:
  */
 const struct sched_class stop_sched_class = {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	.next			= &ghost_agent_sched_class,
+#else
 	.next			= &dl_sched_class,
+#endif
 
 	.enqueue_task		= enqueue_task_stop,
 	.dequeue_task		= dequeue_task_stop,

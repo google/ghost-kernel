@@ -99,6 +99,11 @@
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
+#ifdef CONFIG_SCHED_CLASS_GHOST
+extern unsigned long sysctl_ghost_cfs_load_added;
+extern int sysctl_ghost_switchto_disable;
+extern int sysctl_ghost_commit_at_tick;
+#endif
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
 extern int core_uses_pid;
@@ -1215,6 +1220,29 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 		.extra2		= &one,
+	},
+#endif
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	{
+		.procname	= "ghost_cfs_load_added",
+		.data		= &sysctl_ghost_cfs_load_added,
+		.maxlen		= sizeof(unsigned long),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
+	},
+	{
+		.procname	= "ghost_switchto_disable",
+		.data		= &sysctl_ghost_switchto_disable,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "ghost_commit_at_tick",
+		.data		= &sysctl_ghost_commit_at_tick,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
 	},
 #endif
 	{ }

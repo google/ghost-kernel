@@ -82,7 +82,8 @@ struct task_group;
 #define TASK_WAKING			0x0200
 #define TASK_NOLOAD			0x0400
 #define TASK_NEW			0x0800
-#define TASK_STATE_MAX			0x1000
+#define __TASK_DEFERRABLE_WAKEUP	0x1000
+#define TASK_STATE_MAX			0x2000
 
 /* Convenience macros for the sake of set_current_state: */
 #define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
@@ -494,6 +495,38 @@ struct sched_dl_entity {
 	struct hrtimer inactive_timer;
 };
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+struct ghost_queue;
+struct ghost_status_word;
+struct ghost_enclave;
+struct timerfd_ghost;
+
+struct sched_ghost_entity {
+	struct list_head run_list;
+	ktime_t last_runnable_at;
+
+	/* The following fields are protected by 'task_rq(p)->lock' */
+	struct ghost_queue *dst_q;
+	struct ghost_status_word *status_word;
+	struct ghost_enclave *enclave;
+
+	/*
+	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
+	 * for flags that are used to defer messages.
+	 */
+	uint blocked_task : 1;
+	uint yield_task	: 1;
+	uint new_task	: 1;
+	uint agent	: 1;
+
+	struct list_head task_list;
+};
+
+extern void ghost_commit_greedy_txn(void);
+extern void ghost_timerfd_triggered(struct timerfd_ghost *timer);
+
+#endif
+
 union rcu_special {
 	struct {
 		u8			blocked;
@@ -563,6 +596,10 @@ struct task_struct {
 	const struct sched_class	*sched_class;
 	struct sched_entity		se;
 	struct sched_rt_entity		rt;
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	int64_t gtid;			/* ghost tid */
+	struct sched_ghost_entity ghost;
+#endif
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
 #endif
@@ -629,6 +666,7 @@ struct task_struct {
 	unsigned			sched_contributes_to_load:1;
 	unsigned			sched_migrated:1;
 	unsigned			sched_remote_wakeup:1;
+	unsigned			sched_deferrable_wakeup:1;
 	/* Force alignment to the next boundary: */
 	unsigned			:0;
 
@@ -1104,6 +1142,19 @@ struct task_struct {
 	 * Do not put anything below here!
 	 */
 };
+
+struct bpf_scheduler_kern {
+};
+
+struct bpf_prog;
+union bpf_attr;
+enum bpf_prog_type;
+int scheduler_bpf_prog_attach(const union bpf_attr *attr,
+			      struct bpf_prog *prog);
+int scheduler_bpf_prog_detach(const union bpf_attr *attr,
+			      enum bpf_prog_type ptype);
+int scheduler_bpf_link_attach(const union bpf_attr *attr,
+			      struct bpf_prog *prog);
 
 static inline struct pid *task_pid(struct task_struct *task)
 {
@@ -1654,6 +1705,8 @@ static inline void set_task_cpu(struct task_struct *p, unsigned int cpu)
 # define vcpu_is_preempted(cpu)	false
 #endif
 
+extern int get_user_cpu_mask(unsigned long __user *user_mask_ptr, unsigned len,
+			     struct cpumask *new_mask);
 extern long sched_setaffinity(pid_t pid, const struct cpumask *new_mask);
 extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
 

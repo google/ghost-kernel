@@ -339,6 +339,8 @@
 330	common	pkey_alloc		sys_pkey_alloc
 331	common	pkey_free		sys_pkey_free
 332	common	statx			sys_statx
+450	64	ghost_run		sys_ghost_run
+451	64	ghost			sys_ghost
 
 #
 # x32-specific system call numbers start at 512 to avoid cache impact

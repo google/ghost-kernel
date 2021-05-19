@@ -103,6 +103,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
+#include "sched/sched.h"
+
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -1725,7 +1727,7 @@ static __latent_entropy struct task_struct *copy_process(
 
 	retval = perf_event_init_task(p);
 	if (retval)
-		goto bad_fork_cleanup_policy;
+		goto bad_fork_cleanup_sched;
 	retval = audit_alloc(p);
 	if (retval)
 		goto bad_fork_cleanup_perf;
@@ -1928,6 +1930,10 @@ static __latent_entropy struct task_struct *copy_process(
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	p->gtid = ghost_alloc_gtid(p);
+#endif
+
 	return p;
 
 bad_fork_cancel_cgroup:
@@ -1965,6 +1971,8 @@ bad_fork_cleanup_audit:
 	audit_free(p);
 bad_fork_cleanup_perf:
 	perf_event_free_task(p);
+bad_fork_cleanup_sched:
+	sched_cleanup_fork(p);
 bad_fork_cleanup_policy:
 	lockdep_free_task(p);
 #ifdef CONFIG_NUMA

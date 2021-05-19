@@ -940,5 +940,9 @@ asmlinkage long sys_pkey_alloc(unsigned long flags, unsigned long init_val);
 asmlinkage long sys_pkey_free(int pkey);
 asmlinkage long sys_statx(int dfd, const char __user *path, unsigned flags,
 			  unsigned mask, struct statx __user *buffer);
+asmlinkage long sys_ghost_run(s64 gtid, u32 agent_barrier, u32 task_barrier,
+			      int run_cpu, int run_flags);
+asmlinkage long sys_ghost(u64 op, u64 arg1, u64 arg2, u64 arg3, u64 arg4,
+			  u64 arg5);
 
 #endif
