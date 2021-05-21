@@ -12,6 +12,11 @@ performant framework for delegation of thread scheduling policy to userspace
 processes that enables policy optimization, non-disruptive upgrades, and fault
 isolation.
 
-Compile this code using the standard Linux build process.
+You must compile and install this kernel in order to use the [ghOSt userspace
+component](https://www.github.com/google/ghost-userspace).
+
+This kernel is Linux 4.15. We recommend installing Ubuntu 18.04 LTS, which ships
+with Linux 4.15 by default, as the distribution. Compile this kernel on Ubuntu
+18.04 and then replace the existing 4.15 kernel with this one.
 
 This is not an officially supported Google product.
