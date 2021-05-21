@@ -4298,6 +4298,10 @@ static int __sched_setscheduler(struct task_struct *p,
 	int reset_on_fork;
 	int queue_flags = DEQUEUE_SAVE | DEQUEUE_MOVE | DEQUEUE_NOCLOCK;
 	struct rq *rq;
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	struct ghost_enclave *new_e;
+	struct fd f_enc;
+#endif
 
 	/* The pi code expects interrupts enabled */
 	BUG_ON(pi && in_interrupt());
@@ -4489,11 +4493,20 @@ change:
 	}
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
+	if (ghost_policy(policy)) {
+		new_e = ghost_fdget_enclave(ghost_schedattr_to_enclave_fd(attr),
+					    &f_enc);
+	} else {
+		new_e = NULL;
+	}
 	if (ghost_policy(policy) || ghost_policy(p->policy)) {
-		int error = ghost_setscheduler(p, rq, attr, &reset_on_fork);
+		int error = ghost_setscheduler(p, rq, attr, new_e,
+					       &reset_on_fork);
 
 		if (error) {
 			task_rq_unlock(rq, p, &rf);
+			if (ghost_policy(policy))
+				ghost_fdput_enclave(new_e, &f_enc);
 			return error;
 		}
 	}
@@ -4555,6 +4568,11 @@ change:
 	/* Run balance callbacks after we've adjusted the PI chain: */
 	balance_callback(rq);
 	preempt_enable();
+
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (ghost_policy(policy))
+		ghost_fdput_enclave(new_e, &f_enc);
+#endif
 
 	return 0;
 }

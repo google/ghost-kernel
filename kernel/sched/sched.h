@@ -21,6 +21,8 @@
 #include <linux/sched/cputime.h>
 #include <linux/sched/init.h>
 
+#include <uapi/linux/sched/types.h>
+
 #include <linux/u64_stats_sync.h>
 #include <linux/kernel_stat.h>
 #include <linux/binfmts.h>
@@ -32,6 +34,7 @@
 #include <linux/slab.h>
 #include <linux/cgroup.h>
 #include <linux/kref.h>
+#include <linux/file.h>
 
 #ifdef CONFIG_PARAVIRT
 #include <asm/paravirt.h>
@@ -130,7 +133,7 @@ struct ghost_enclave {
 	 * 'lock' serializes mutation of 'sw_region_list' as well as
 	 * allocation and freeing of status words within a region.
 	 *
-	 * 'lock' also serializes mutation of 'queue_list' and 'def_q'.
+	 * 'lock' also serializes mutation of 'def_q'.
 	 *
 	 * 'lock' requires the irqsave variant of spin_lock because
 	 * it is called in code paths with the 'rq->lock' held and
@@ -141,11 +144,10 @@ struct ghost_enclave {
 	struct list_head sw_region_list;
 	ulong sw_region_ids[BITS_TO_LONGS(GHOST_MAX_SW_REGIONS)];
 
-	struct ghost_cpu_data *cpu_data;
+	struct ghost_cpu_data **cpu_data;
 	struct cpumask cpus;
 
 	struct ghost_queue *def_q;	/* default queue */
-	struct list_head queue_list;
 
 	struct list_head task_list;	/* all non-agent tasks in the enclave */
 	struct work_struct task_reaper;
@@ -168,6 +170,7 @@ struct ghost_enclave {
 
 /* In kernel/sched/ghostfs.c */
 extern struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f);
+extern void ghostfs_put_enclave_ctl(struct file *f);
 extern void ghostfs_remove_enclave(struct ghost_enclave *e);
 
 /* In kernel/sched/ghost.c */
@@ -179,6 +182,8 @@ extern int ghost_enclave_set_cpus(struct ghost_enclave *e,
 				  const struct cpumask *cpus);
 extern int ghost_region_mmap(struct file *file, struct vm_area_struct *vma,
 			     void *addr, ulong mapsize);
+extern int ghost_cpu_data_mmap(struct file *file, struct vm_area_struct *vma,
+			       struct ghost_cpu_data **cpu_data, ulong mapsize);
 extern struct ghost_sw_region *ghost_create_sw_region(struct ghost_enclave *e,
 						      unsigned int id,
 						      unsigned int node);
@@ -186,6 +191,8 @@ extern int ghost_sw_get_info(struct ghost_enclave *e,
 			     struct ghost_ioc_sw_get_info __user *arg);
 extern int ghost_sw_free(struct ghost_enclave *e,
 			     struct ghost_sw_info __user *uinfo);
+extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
+extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 
 extern void init_sched_ghost_class(void);
 extern void init_ghost_rq(struct ghost_rq *ghost_rq);
@@ -193,6 +200,7 @@ extern bool ghost_agent(const struct sched_attr *attr);
 extern int ghost_validate_sched_attr(const struct sched_attr *attr);
 extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      const struct sched_attr *attr,
+			      struct ghost_enclave *new_e,
 			      int *reset_on_fork);
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
@@ -225,6 +233,16 @@ static inline void ghost_sw_set_flag(struct ghost_status_word *sw,
 static inline void ghost_sw_clear_flag(struct ghost_status_word *sw,
 				       uint32_t flag) {
 	smp_store_release(&sw->flags, sw->flags & ~flag);
+}
+
+static inline int ghost_schedattr_to_enclave_fd(const struct sched_attr *attr)
+{
+	return attr->sched_runtime;
+}
+
+static inline int ghost_schedattr_to_queue_fd(const struct sched_attr *attr)
+{
+	return attr->sched_deadline;
 }
 
 #else

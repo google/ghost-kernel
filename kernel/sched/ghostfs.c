@@ -20,6 +20,8 @@
 #include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 
+#include "../../fs/kernfs/kernfs-internal.h"
+
 /* Helper for when you "echo foo > ctl" without the -n. */
 static void strip_slash_n(char *buf, size_t count)
 {
@@ -195,7 +197,8 @@ static int gf_cpu_data_mmap(struct kernfs_open_file *of,
 {
 	struct ghost_enclave *e = of_to_e(of);
 
-	return ghost_region_mmap(of->file, vma, e->cpu_data, of->kn->attr.size);
+	return ghost_cpu_data_mmap(of->file, vma, e->cpu_data,
+				   of->kn->attr.size);
 }
 
 static struct kernfs_ops gf_ops_e_cpu_data = {
@@ -504,8 +507,11 @@ static struct kernfs_ops gf_ops_e_ctl = {
  * other file types, but since this is a backdoor into the FS, we only need to
  * support ctl.
  *
- * Any direct operations on files in the enclave directory will use filesystem
- * ops, which won't need this helper, since we already have the kn.
+ * Successful callers must call ghostfs_put_ctl_enclave(f).
+ *
+ * The kernfs_ops don't need this helper.  kernfs manages the the refcounts.  We
+ * need to do it manually here, because this is is a "backdoor" function to get
+ * the enclave pointer.  That pointer is kept alive by kernfs.
  */
 struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
 {
@@ -518,7 +524,25 @@ struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
 		return NULL;
 	if (kn->attr.ops != &gf_ops_e_ctl)
 		return NULL;
+	if (!kernfs_get_active(kn))
+		return NULL;
+	WARN_ON(!kn->priv);
 	return kn->priv;
+}
+
+/* Pair this with a successful ghostfs_ctl_to_enclave call. */
+void ghostfs_put_enclave_ctl(struct file *f)
+{
+	struct kernfs_node *kn;
+
+	kn = kernfs_node_from_file(f);
+	if (WARN_ON(!kn))
+		return;
+	if (WARN_ON(kernfs_type(kn) != KERNFS_FILE))
+		return;
+	if (WARN_ON(kn->attr.ops != &gf_ops_e_ctl))
+		return;
+	kernfs_put_active(kn);
 }
 
 static int gf_runnable_timeout_show(struct seq_file *sf, void *v)
