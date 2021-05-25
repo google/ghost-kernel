@@ -5005,7 +5005,8 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2, u64, arg3, u64, arg4,
 {
 	bool be_nice = true;
 
-	if (op == GHOST_GET_GTID)
+	if (op == GHOST_GET_GTID_10 || op == GHOST_GET_GTID_11 ||
+	    op == GHOST_BASE_GET_GTID)
 		be_nice = false;
 
 	if (be_nice && !capable(CAP_SYS_NICE))
@@ -5042,10 +5043,15 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2, u64, arg3, u64, arg4,
 	case GHOST_GTID_LOOKUP:
 		return ghost_gtid_lookup(arg1, arg2, arg3,
 					 (int64_t __user *)arg4);
-	case GHOST_GET_GTID:
+	case GHOST_GET_GTID_10:
+	case GHOST_GET_GTID_11:
+	case GHOST_BASE_GET_GTID:
 		return ghost_get_gtid((int64_t __user *)arg1);
 	default:
-		return -EINVAL;
+		if (op >= _GHOST_BASE_OP_FIRST)
+			return -EOPNOTSUPP;
+		else
+			return -EINVAL;
 	}
 }
 
