@@ -843,6 +843,29 @@ static __poll_t kernfs_fop_poll(struct file *filp, poll_table *wait)
 	return ret;
 }
 
+static long kernfs_fop_ioctl(struct file *file, unsigned int cmd,
+			     unsigned long arg)
+{
+	struct kernfs_open_file *of = kernfs_of(file);
+	const struct kernfs_ops *ops;
+	long ret;
+
+	/*
+	 * Not locking of->mutex: you can have concurrent ioctl calls on the
+	 * same file.
+	 */
+	if (!kernfs_get_active(of->kn))
+		return -ENODEV;
+	ops = kernfs_ops(of->kn);
+	if (ops->ioctl)
+		ret = ops->ioctl(of, cmd, arg);
+	else
+		ret = -ENOIOCTLCMD;
+	kernfs_put_active(of->kn);
+
+	return ret;
+}
+
 static void kernfs_notify_workfn(struct work_struct *work)
 {
 	struct kernfs_node *kn;
@@ -948,10 +971,18 @@ const struct file_operations kernfs_file_fops = {
 	.open		= kernfs_fop_open,
 	.release	= kernfs_fop_release,
 	.poll		= kernfs_fop_poll,
+	.unlocked_ioctl	= kernfs_fop_ioctl,
 	.fsync		= noop_fsync,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
 };
+
+struct kernfs_node *kernfs_node_from_file(struct file *file)
+{
+	if (file->f_op != &kernfs_file_fops)
+		return NULL;
+	return file->f_inode->i_private;
+}
 
 /**
  * __kernfs_create_file - kernfs internal function to create a file

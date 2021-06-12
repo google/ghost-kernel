@@ -95,7 +95,8 @@ struct io_uring_task;
 #define TASK_WAKING			0x0200
 #define TASK_NOLOAD			0x0400
 #define TASK_NEW			0x0800
-#define TASK_STATE_MAX			0x1000
+#define __TASK_DEFERRABLE_WAKEUP	0x1000
+#define TASK_STATE_MAX			0x2000
 
 /* Convenience macros for the sake of set_current_state: */
 #define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
@@ -583,6 +584,38 @@ struct sched_dl_entity {
 #endif
 };
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+struct ghost_queue;
+struct ghost_status_word;
+struct ghost_enclave;
+struct timerfd_ghost;
+
+struct sched_ghost_entity {
+	struct list_head run_list;
+	ktime_t last_runnable_at;
+
+	/* The following fields are protected by 'task_rq(p)->lock' */
+	struct ghost_queue *dst_q;
+	struct ghost_status_word *status_word;
+	struct ghost_enclave *enclave;
+
+	/*
+	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
+	 * for flags that are used to defer messages.
+	 */
+	uint blocked_task : 1;
+	uint yield_task : 1;
+	uint new_task   : 1;
+	uint agent      : 1;
+
+	struct list_head task_list;
+};
+
+extern void ghost_commit_greedy_txn(void);
+extern void ghost_timerfd_triggered(struct timerfd_ghost *timer);
+
+#endif
+
 #ifdef CONFIG_UCLAMP_TASK
 /* Number of utilization clamp buckets (shorter alias) */
 #define UCLAMP_BUCKETS CONFIG_UCLAMP_BUCKETS_COUNT
@@ -700,6 +733,10 @@ struct task_struct {
 	const struct sched_class	*sched_class;
 	struct sched_entity		se;
 	struct sched_rt_entity		rt;
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	int64_t gtid;			/* ghost tid */
+	struct sched_ghost_entity ghost;
+#endif
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
 #endif
@@ -815,6 +852,7 @@ struct task_struct {
 	 * ->sched_remote_wakeup gets used, so it can be in this word.
 	 */
 	unsigned			sched_remote_wakeup:1;
+	unsigned			sched_deferrable_wakeup:1;
 
 	/* Bit to tell LSMs we're in execve(): */
 	unsigned			in_execve:1;
@@ -1385,6 +1423,19 @@ struct task_struct {
 	 */
 };
 
+struct bpf_scheduler_kern {
+};
+
+struct bpf_prog;
+union bpf_attr;
+enum bpf_prog_type;
+int scheduler_bpf_prog_attach(const union bpf_attr *attr,
+			      struct bpf_prog *prog);
+int scheduler_bpf_prog_detach(const union bpf_attr *attr,
+			      enum bpf_prog_type ptype);
+int scheduler_bpf_link_attach(const union bpf_attr *attr,
+			      struct bpf_prog *prog);
+
 static inline struct pid *task_pid(struct task_struct *task)
 {
 	return task->thread_pid;
@@ -1797,14 +1848,32 @@ extern char *__get_task_comm(char *to, size_t len, struct task_struct *tsk);
 })
 
 #ifdef CONFIG_SMP
+extern void do_resched_ipi_work(void);
 static __always_inline void scheduler_ipi(void)
 {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	/*
+	 * ghost_commit_pending_txn() needs RCU for correct operation so
+	 * make sure RCU is watching in case we interrupted an idle CPU.
+	 *
+	 * Rather than the full irq_enter/irq_exit we do the bare minimum
+	 * required for RCU to avoid pessimizing the common case (all work
+	 * done in the irq return path). Also see the comment below about
+	 * irq_enter/irq_exit.
+	 */
+	if (is_idle_task(current))
+		rcu_irq_enter();
+	ghost_commit_greedy_txn();
+	if (is_idle_task(current))
+		rcu_irq_exit();
+#endif
 	/*
 	 * Fold TIF_NEED_RESCHED into the preempt_count; anybody setting
 	 * TIF_NEED_RESCHED remotely (for the first time) will also send
 	 * this IPI.
 	 */
 	preempt_fold_need_resched();
+	do_resched_ipi_work();
 }
 extern unsigned long wait_task_inactive(struct task_struct *, long match_state);
 #else
@@ -1960,6 +2029,9 @@ static inline bool vcpu_is_preempted(int cpu)
 	return false;
 }
 #endif
+
+extern int get_user_cpu_mask(unsigned long __user *user_mask_ptr, unsigned len,
+			     struct cpumask *new_mask);
 
 extern long sched_setaffinity(pid_t pid, const struct cpumask *new_mask);
 extern long sched_getaffinity(pid_t pid, struct cpumask *mask);

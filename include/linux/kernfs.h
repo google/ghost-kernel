@@ -263,6 +263,9 @@ struct kernfs_ops {
 	__poll_t (*poll)(struct kernfs_open_file *of,
 			 struct poll_table_struct *pt);
 
+	long (*ioctl)(struct kernfs_open_file *of, unsigned int cmd,
+		      unsigned long arg);
+
 	int (*mmap)(struct kernfs_open_file *of, struct vm_area_struct *vma);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
@@ -357,6 +360,7 @@ void kernfs_get(struct kernfs_node *kn);
 void kernfs_put(struct kernfs_node *kn);
 
 struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry);
+struct kernfs_node *kernfs_node_from_file(struct file *file);
 struct kernfs_root *kernfs_root_from_sb(struct super_block *sb);
 struct inode *kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn);
 

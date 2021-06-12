@@ -1364,4 +1364,10 @@ int __sys_getsockopt(int fd, int level, int optname, char __user *optval,
 		int __user *optlen);
 int __sys_setsockopt(int fd, int level, int optname, char __user *optval,
 		int optlen);
+
+asmlinkage long gsys_ghost_run(s64 gtid, u32 agent_barrier, u32 task_barrier,
+			       int run_cpu, int run_flags);
+asmlinkage long gsys_ghost(u64 op, u64 arg1, u64 arg2, u64 arg3, u64 arg4,
+			   u64 arg5);
+
 #endif

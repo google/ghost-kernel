@@ -2355,3 +2355,18 @@ config ARCH_HAS_SYNC_CORE_BEFORE_USERMODE
 # <asm/syscall_wrapper.h>.
 config ARCH_HAS_SYSCALL_WRAPPER
 	def_bool n
+
+config SCHED_CLASS_GHOST
+	bool "ghOSt scheduling class"
+	depends on X86_64
+	default n
+	help
+	  ghOSt is a scheduling class with policy decisions delegated
+	  to a user-space agent.
+
+config DEBUG_GHOST
+	bool "Extra debug checks for ghOSt."
+	depends on SCHED_CLASS_GHOST
+	default n
+	help
+	  Enable extra runtime debug checks for ghOSt.

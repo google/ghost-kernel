@@ -1629,7 +1629,7 @@ static void update_numa_stats(struct task_numa_env *env,
 		ns->nr_running += rq->cfs.h_nr_running;
 		ns->compute_capacity += capacity_of(cpu);
 
-		if (find_idle && !rq->nr_running && idle_cpu(cpu)) {
+		if (find_idle && !rq_adj_nr_running(rq) && idle_cpu(cpu)) {
 			if (READ_ONCE(rq->numa_migrate_on) ||
 			    !cpumask_test_cpu(cpu, env->p->cpus_ptr))
 				continue;
@@ -5683,7 +5683,8 @@ static struct {
 
 static unsigned long cpu_load(struct rq *rq)
 {
-	return cfs_rq_load_avg(&rq->cfs);
+	return cfs_rq_load_avg(&rq->cfs) +
+	       ghost_cfs_added_load(rq);
 }
 
 /*
@@ -5714,12 +5715,13 @@ static unsigned long cpu_load_without(struct rq *rq, struct task_struct *p)
 	/* Discount task's util from CPU's util */
 	lsub_positive(&load, task_h_load(p));
 
-	return load;
+	return load + ghost_cfs_added_load(rq);
 }
 
 static unsigned long cpu_runnable(struct rq *rq)
 {
-	return cfs_rq_runnable_avg(&rq->cfs);
+	return cfs_rq_runnable_avg(&rq->cfs) +
+	       ghost_cfs_added_load(rq);
 }
 
 static unsigned long cpu_runnable_without(struct rq *rq, struct task_struct *p)
@@ -5737,7 +5739,7 @@ static unsigned long cpu_runnable_without(struct rq *rq, struct task_struct *p)
 	/* Discount task's runnable from CPU's runnable */
 	lsub_positive(&runnable, p->se.avg.runnable_avg);
 
-	return runnable;
+	return runnable + ghost_cfs_added_load(rq);
 }
 
 static unsigned long capacity_of(int cpu)
@@ -6271,7 +6273,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	 */
 	if (is_per_cpu_kthread(current) &&
 	    prev == smp_processor_id() &&
-	    this_rq()->nr_running <= 1) {
+	    rq_adj_nr_running(this_rq()) <= 1) {
 		return prev;
 	}
 
@@ -6849,8 +6851,16 @@ static void task_dead_fair(struct task_struct *p)
 static int
 balance_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (rq_adj_nr_running(rq))
+		return 1;
+
+	if (skip_fair_idle_balance(&rq->cfs, prev))
+		return 0;
+#else
 	if (rq->nr_running)
 		return 1;
+#endif
 
 	return newidle_balance(rq, rf) != 0;
 }
@@ -7140,6 +7150,10 @@ done: __maybe_unused;
 	return p;
 
 idle:
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (skip_fair_idle_balance(cfs_rq, prev))
+		return NULL;
+#endif
 	if (!rf)
 		return NULL;
 
@@ -7683,7 +7697,8 @@ static int detach_tasks(struct lb_env *env)
 		 * We don't want to steal all, otherwise we may be treated likewise,
 		 * which could at worst lead to a livelock crash.
 		 */
-		if (env->idle != CPU_NOT_IDLE && env->src_rq->nr_running <= 1)
+		if (env->idle != CPU_NOT_IDLE &&
+		    rq_adj_nr_running(env->src_rq) <= 1)
 			break;
 
 		p = list_last_entry(tasks, struct task_struct, se.group_node);
@@ -8421,7 +8436,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 		sgs->group_runnable += cpu_runnable(rq);
 		sgs->sum_h_nr_running += rq->cfs.h_nr_running;
 
-		nr_running = rq->nr_running;
+		nr_running = rq_adj_nr_running(rq);
 		sgs->sum_nr_running += nr_running;
 
 		if (nr_running > 1)
@@ -9623,7 +9638,7 @@ redo:
 	env.src_rq = busiest;
 
 	ld_moved = 0;
-	if (busiest->nr_running > 1) {
+	if (rq_adj_nr_running(busiest) > 1) {
 		/*
 		 * Attempt to move tasks. If find_busiest_group has found
 		 * an imbalance but busiest->nr_running <= 1, the group is
@@ -9631,7 +9646,8 @@ redo:
 		 * correctly treated as an imbalance.
 		 */
 		env.flags |= LBF_ALL_PINNED;
-		env.loop_max  = min(sysctl_sched_nr_migrate, busiest->nr_running);
+		env.loop_max  = min(sysctl_sched_nr_migrate,
+				    rq_adj_nr_running(busiest));
 
 more_balance:
 		rq_lock_irqsave(busiest, &rf);
@@ -9912,7 +9928,7 @@ static int active_load_balance_cpu_stop(void *data)
 		goto out_unlock;
 
 	/* Is there any task to move? */
-	if (busiest_rq->nr_running <= 1)
+	if (rq_adj_nr_running(busiest_rq) <= 1)
 		goto out_unlock;
 
 	/*
@@ -10191,7 +10207,7 @@ static void nohz_balancer_kick(struct rq *rq)
 	if (time_before(now, nohz.next_balance))
 		goto out;
 
-	if (rq->nr_running >= 2) {
+	if (rq_adj_nr_running(rq) >= 2) {
 		flags = NOHZ_KICK_MASK;
 		goto out;
 	}
@@ -10634,7 +10650,7 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 		 * Stop searching for tasks to pull if there are
 		 * now runnable tasks on this rq.
 		 */
-		if (pulled_task || this_rq->nr_running > 0)
+		if (pulled_task || rq_adj_nr_running(this_rq) > 0)
 			break;
 	}
 	rcu_read_unlock();
@@ -10658,7 +10674,7 @@ out:
 		this_rq->next_balance = next_balance;
 
 	/* Is there a task of a high priority class? */
-	if (this_rq->nr_running != this_rq->cfs.h_nr_running)
+	if (rq_adj_nr_running(this_rq) != this_rq->cfs.h_nr_running)
 		pulled_task = -1;
 
 	if (pulled_task)

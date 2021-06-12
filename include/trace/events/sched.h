@@ -684,6 +684,26 @@ TRACE_EVENT(sched_wake_idle_without_ipi,
 	TP_printk("cpu=%d", __entry->cpu)
 );
 
+TRACE_EVENT(sched_ghost_latched,
+
+	TP_PROTO(struct task_struct *old,
+		 struct task_struct *new),
+
+	TP_ARGS(old, new),
+
+	TP_STRUCT__entry(
+		__field(pid_t, old_pid)
+		__field(pid_t, new_pid)
+	),
+
+	TP_fast_assign(
+		__entry->old_pid	= old ? old->pid : 0;
+		__entry->new_pid	= new ? new->pid : 0;
+	),
+
+	TP_printk("old_pid=%d, new_pid=%d", __entry->old_pid, __entry->new_pid)
+);
+
 /*
  * Following tracepoints are not exported in tracefs and provide hooking
  * mechanisms only for testing and debugging purposes.

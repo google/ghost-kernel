@@ -31,6 +31,13 @@ extern unsigned int sysctl_sched_min_granularity;
 extern unsigned int sysctl_sched_wakeup_granularity;
 extern unsigned int sysctl_sched_child_runs_first;
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+extern unsigned long sysctl_ghost_cfs_load_added;
+extern int sysctl_ghost_wake_on_waker_cpu;
+extern int sysctl_ghost_switchto_disable;
+extern int sysctl_ghost_commit_at_tick;
+#endif
+
 enum sched_tunable_scaling {
 	SCHED_TUNABLESCALING_NONE,
 	SCHED_TUNABLESCALING_LOG,

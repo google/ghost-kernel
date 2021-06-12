@@ -1823,7 +1823,7 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 		 * the same lock on wakeup ep_poll_callback() side, so it
 		 * is safe to avoid an explicit barrier.
 		 */
-		__set_current_state(TASK_INTERRUPTIBLE);
+		__set_current_state(TASK_INTERRUPTIBLE|__TASK_DEFERRABLE_WAKEUP);
 
 		/*
 		 * Do the final check under the lock. ep_scan_ready_list()

@@ -2585,7 +2585,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	 * queue_me() calls spin_unlock() upon completion, both serializing
 	 * access to the hash list and forcing another memory barrier.
 	 */
-	set_current_state(TASK_INTERRUPTIBLE);
+	set_current_state(TASK_INTERRUPTIBLE | __TASK_DEFERRABLE_WAKEUP);
 	queue_me(q, hb);
 
 	/* Arm the timer */

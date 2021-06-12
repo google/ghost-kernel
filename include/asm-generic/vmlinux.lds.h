@@ -125,6 +125,19 @@
  * used to determine the order of the priority of each sched class in
  * relation to each other.
  */
+#ifdef CONFIG_SCHED_CLASS_GHOST
+#define SCHED_DATA				\
+	STRUCT_ALIGN();				\
+	__begin_sched_classes = .;		\
+	*(__idle_sched_class)			\
+	*(__ghost_sched_class)			\
+	*(__fair_sched_class)			\
+	*(__rt_sched_class)			\
+	*(__dl_sched_class)			\
+	*(__ghost_agent_sched_class)		\
+	*(__stop_sched_class)			\
+	__end_sched_classes = .;
+#else
 #define SCHED_DATA				\
 	STRUCT_ALIGN();				\
 	__begin_sched_classes = .;		\
@@ -134,6 +147,7 @@
 	*(__dl_sched_class)			\
 	*(__stop_sched_class)			\
 	__end_sched_classes = .;
+#endif
 
 /* The actual configuration determine if the init/exit sections
  * are handled as text/data or they can be discarded (which

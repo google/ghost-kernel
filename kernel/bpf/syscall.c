@@ -2002,6 +2002,13 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 		if (expected_attach_type == BPF_SK_LOOKUP)
 			return 0;
 		return -EINVAL;
+	case BPF_PROG_TYPE_SCHEDULER:
+		switch (expected_attach_type) {
+		case BPF_SCHEDULER_TICK:
+			return 0;
+		default:
+			return -EINVAL;
+		}
 	case BPF_PROG_TYPE_EXT:
 		if (expected_attach_type)
 			return -EINVAL;
@@ -2952,6 +2959,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_SCHEDULER_TICK:
+		return BPF_PROG_TYPE_SCHEDULER;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -3007,6 +3016,9 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_SOCK_OPS:
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
+	case BPF_PROG_TYPE_SCHEDULER:
+		ret = scheduler_bpf_prog_attach(attr, prog);
+		break;
 	default:
 		ret = -EINVAL;
 	}
@@ -3043,6 +3055,8 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_SOCK_OPS:
 		return cgroup_bpf_prog_detach(attr, ptype);
+	case BPF_PROG_TYPE_SCHEDULER:
+		return scheduler_bpf_prog_detach(attr, ptype);
 	default:
 		return -EINVAL;
 	}
@@ -4060,6 +4074,9 @@ static int link_create(union bpf_attr *attr)
 		ret = bpf_xdp_link_attach(attr, prog);
 		break;
 #endif
+	case BPF_PROG_TYPE_SCHEDULER:
+		ret = scheduler_bpf_link_attach(attr, prog);
+		break;
 	default:
 		ret = -EINVAL;
 	}

@@ -8,6 +8,10 @@
 
 #include "common.h"
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+#include <uapi/linux/ghost.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/syscalls.h>
 
@@ -184,6 +188,9 @@ static unsigned long exit_to_user_mode_loop(struct pt_regs *regs,
 		 * enabled above.
 		 */
 		local_irq_disable_exit_to_user();
+#ifdef CONFIG_SCHED_CLASS_GHOST
+		ghost_commit_greedy_txn();
+#endif
 		ti_work = READ_ONCE(current_thread_info()->flags);
 	}
 
@@ -196,6 +203,9 @@ static void exit_to_user_mode_prepare(struct pt_regs *regs)
 	unsigned long ti_work = READ_ONCE(current_thread_info()->flags);
 
 	lockdep_assert_irqs_disabled();
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	ghost_commit_greedy_txn();
+#endif
 
 	if (unlikely(ti_work & EXIT_TO_USER_MODE_WORK))
 		ti_work = exit_to_user_mode_loop(regs, ti_work);
