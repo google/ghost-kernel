@@ -7150,12 +7150,12 @@ done: __maybe_unused;
 	return p;
 
 idle:
+	if (!rf)
+		return NULL;
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	if (skip_fair_idle_balance(cfs_rq, prev))
 		return NULL;
 #endif
-	if (!rf)
-		return NULL;
 
 	new_tasks = newidle_balance(rq, rf);
 
