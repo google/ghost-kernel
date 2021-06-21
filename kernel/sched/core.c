@@ -4137,7 +4137,7 @@ struct callback_head balance_push_callback = {
 	.func = (void (*)(struct callback_head *))balance_push,
 };
 
-static inline struct callback_head *splice_balance_callbacks(struct rq *rq)
+inline struct callback_head *splice_balance_callbacks(struct rq *rq)
 {
 	struct callback_head *head = rq->balance_callback;
 
@@ -4153,7 +4153,7 @@ static void __balance_callbacks(struct rq *rq)
 	do_balance_callbacks(rq, splice_balance_callbacks(rq));
 }
 
-static inline void balance_callbacks(struct rq *rq, struct callback_head *head)
+inline void balance_callbacks(struct rq *rq, struct callback_head *head)
 {
 	unsigned long flags;
 

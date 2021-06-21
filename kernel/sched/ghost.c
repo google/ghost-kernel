@@ -3553,10 +3553,27 @@ static void task_dead_ghost(struct task_struct *p)
 {
 	struct rq_flags rf;
 	struct rq *rq;
+	struct callback_head *head;
+
+	WARN_ON_ONCE(preemptible());
 
 	rq = task_rq_lock(p, &rf);
 	release_from_ghost(rq, p);
+	head = splice_balance_callbacks(rq);
 	task_rq_unlock(rq, p, &rf);
+	/*
+	 * 'rq_pin_lock' issues a warning when the there are pending callback
+	 * functions for the runqueue. The point of this warning is to ensure
+	 * that callbacks are run in a timely manner
+	 * (https://lkml.org/lkml/2020/9/11/1027).
+	 *
+	 * When 'release_from_ghost' adds a callback to the balance queue in the
+	 * task_dead path, there is no subsequent call to 'balance_callbacks'
+	 * before 'rq_pin_lock' is called. This causes the warning to be issued.
+	 *
+	 * To avoid the warning, we manually call 'balance_callbacks' here.
+	 */
+	balance_callbacks(rq, head);
 }
 
 /*

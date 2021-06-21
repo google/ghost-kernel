@@ -279,6 +279,9 @@ static inline int ghost_schedattr_to_queue_fd(const struct sched_attr *attr)
 static inline unsigned long ghost_cfs_added_load(struct rq *rq) { return 0; }
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
+struct callback_head *splice_balance_callbacks(struct rq *rq);
+void balance_callbacks(struct rq *rq, struct callback_head *head);
+
 /*
  * Helpers for converting nanosecond timing to jiffy resolution
  */
