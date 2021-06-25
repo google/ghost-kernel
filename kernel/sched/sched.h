@@ -243,6 +243,7 @@ extern void ghost_sched_cleanup_fork(struct task_struct *p);
 extern void ghost_latched_task_preempted(struct rq *rq);
 extern void ghost_task_preempted(struct rq *rq, struct task_struct *prev);
 extern unsigned long ghost_cfs_added_load(struct rq *rq);
+extern int ghost_wake_agent_on_check(int cpu);
 extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
 #ifdef CONFIG_BPF
