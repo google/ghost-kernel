@@ -29,6 +29,23 @@ static const struct bpf_func_proto bpf_ghost_wake_agent_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_4(bpf_ghost_run_gtid, struct bpf_ghost_sched_kern *, ctx, s64, gtid,
+	   u32, task_barrier, int, run_flags)
+{
+	return ghost_run_gtid_on(gtid, task_barrier, run_flags,
+				 smp_processor_id());
+}
+
+static const struct bpf_func_proto bpf_ghost_run_gtid_proto = {
+	.func		= bpf_ghost_run_gtid,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_ANYTHING,
+};
+
 bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
 	struct bpf_ghost_sched_kern ctx = {};
@@ -53,9 +70,12 @@ bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 
 	lockdep_assert_held(&rq->lock);
 
+	rcu_read_lock();
 	prog = rcu_dereference(e->bpf_pnt);
-	if (!prog)
+	if (!prog) {
+		rcu_read_unlock();
 		return false;
+	}
 
 	/*
 	 * BPF programs attached here may call ghost_run_gtid(), which requires
@@ -70,6 +90,7 @@ bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 	raw_spin_lock(&rq->lock);
 	rq_repin_lock(rq, rf);
 
+	rcu_read_unlock();
 	/* prog returns 1 meaning "retry". */
 	return ret == 1;
 }
@@ -320,6 +341,13 @@ ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	switch (func_id) {
 	case BPF_FUNC_ghost_wake_agent:
 		return &bpf_ghost_wake_agent_proto;
+	case BPF_FUNC_ghost_run_gtid:
+		switch (prog->expected_attach_type) {
+		case BPF_GHOST_SCHED_PNT:
+			return &bpf_ghost_run_gtid_proto;
+		default:
+			return NULL;
+		}
 	default:
 		return bpf_base_func_proto(func_id);
 	}

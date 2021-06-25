@@ -3840,6 +3840,14 @@ union bpf_attr {
  *
  *	Return
  *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_run_gtid(struct bpf_ghost_sched *ctx, s64 gtid, u32
+ *			   task_barrier, s32 run_flags)
+ *	Description
+ *		Runs (latches) task **gtid** on this cpu.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4046,6 +4054,7 @@ union bpf_attr {
 	FN(placeholder_038),		\
 	FN(placeholder_039),		\
 	FN(ghost_wake_agent),		\
+	FN(ghost_run_gtid),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

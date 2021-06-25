@@ -4327,6 +4327,114 @@ done:
 	return error;
 }
 
+static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
+			       int cpu, bool check_caller_enclave)
+{
+	struct rq_flags rf;
+	struct rq *rq;
+	int err = 0;
+	struct task_struct *next;
+
+	const int supported_flags = RTLA_ON_PREEMPT	|
+				    RTLA_ON_BLOCKED	|
+				    RTLA_ON_YIELD	|
+				    NEED_L1D_FLUSH	|
+				    ALLOW_TASK_ONCPU	|
+				    ELIDE_PREEMPT	|
+				    0;
+
+	WARN_ON_ONCE(preemptible());
+
+	if (cpu < 0)
+		return -EINVAL;
+	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
+		return -ERANGE;
+
+	if (!run_flags_valid(run_flags, supported_flags, gtid))
+		return -EINVAL;
+
+	if (check_caller_enclave &&
+	    !check_same_enclave(smp_processor_id(), cpu)) {
+		return -EXDEV;
+	}
+
+	rcu_read_lock();
+	next = find_task_by_gtid(gtid);
+	if (next == NULL || next->ghost.agent) {
+		rcu_read_unlock();
+		return -ENOENT;
+	}
+	rq = task_rq_lock(next, &rf);
+	rcu_read_unlock();
+
+	err = validate_next_task(rq, next, task_barrier, /*state=*/ NULL);
+	if (err) {
+		task_rq_unlock(rq, next, &rf);
+		return err;
+	}
+
+	if (task_running(rq, next)) {
+		task_rq_unlock(rq, next, &rf);
+		return -EBUSY;
+	}
+
+	rq = ghost_move_task(rq, next, cpu, &rf);
+
+	/*
+	 * Must not latch a task if there is no agent, otherwise PNT will never
+	 * see it.  (Latched tasks are cleared when the agent exits).
+	 */
+	if (unlikely(!rq->ghost.agent)) {
+		task_rq_unlock(rq, next, &rf);
+		return -EINVAL;
+	}
+
+	/*
+	 * If the RQ is in the middle of PNT (where it briefly unlocks),
+	 * ghost_can_schedule() is not accurate.  rq->curr is still the
+	 * task that is scheduling, and it may be from CFS.
+	 *
+	 * This does not mean that our thread is in PNT.  It's possible that we
+	 * are a wakeup BPF program and the PNT thread has unlocked the RQ and
+	 * is running its own BPF program.  Either way, PNT will check for a
+	 * latched task or for a higher priority task when it relocks.
+	 */
+	if (!rq->ghost.in_pnt_bpf && !ghost_can_schedule(rq, gtid)) {
+		task_rq_unlock(rq, next, &rf);
+		return -ENOSPC;
+	}
+
+	ghost_set_pnt_state(rq, next, run_flags);
+	task_rq_unlock(rq, next, &rf);
+
+	return 0;
+}
+
+/*
+ * Attempts to run gtid on cpu.  Returns 0 or -error.
+ *
+ * Called from BPF helpers.  The programs that can call those helpers are
+ * explicitly allowed in ghost_sched_func_proto.
+ */
+int ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags, int cpu)
+{
+	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
+				   /*check_caller_enclave=*/ false);
+}
+
+/*
+ * Attempts to run gtid on cpu.  Returns 0 or -error.
+ *
+ * Like ghost_run_gtid_on, but checks that the calling CPU and the target cpu
+ * are in the same enclave.
+ */
+int ghost_run_gtid_on_check(gtid_t gtid, u32 task_barrier, int run_flags,
+			    int cpu)
+{
+	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
+				   /*check_caller_enclave=*/ true);
+}
+
 static inline bool _ghost_txn_ready(int cpu, int *commit_flags)
 {
 	struct ghost_txn *txn;

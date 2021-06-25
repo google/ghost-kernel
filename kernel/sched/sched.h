@@ -249,6 +249,10 @@ extern unsigned long ghost_cfs_added_load(struct rq *rq);
 extern int ghost_wake_agent_on_check(int cpu);
 extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
+extern int ghost_run_gtid_on(s64 gtid, u32 task_barrier, int run_flags,
+			     int cpu);
+extern int ghost_run_gtid_on_check(s64 gtid, u32 task_barrier, int run_flags,
+				   int cpu);
 
 struct rq_flags;
 #ifdef CONFIG_BPF
