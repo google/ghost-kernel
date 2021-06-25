@@ -765,6 +765,8 @@ static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 static int balance_ghost(struct rq *rq, struct task_struct *prev,
 			 struct rq_flags *rf)
 {
+
+	bool bpf_ret;
 	struct task_struct *agent = rq->ghost.agent;
 
 	if (!agent || !agent->on_rq)
@@ -786,11 +788,19 @@ static int balance_ghost(struct rq *rq, struct task_struct *prev,
 		rq_repin_lock(rq, rf);
 	}
 
+	if (!rq->ghost.latched_task && rq->ghost.pnt_bpf_once) {
+		rq->ghost.pnt_bpf_once = false;
+		/* If there is a BPF program, this will unlock the RQ */
+		rq->ghost.in_pnt_bpf = true;
+		bpf_ret = ghost_bpf_pnt(agent->ghost.enclave, rq, rf);
+		rq->ghost.in_pnt_bpf = false;
+	}
+
 	/*
 	 * We have something to run in 'latched_task' or a higher priority
 	 * sched_class became runnable while the rq->lock was dropped.
 	 */
-	return rq->ghost.latched_task || rq_adj_nr_running(rq);
+	return rq->ghost.latched_task || rq_adj_nr_running(rq) || bpf_ret;
 }
 
 static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)

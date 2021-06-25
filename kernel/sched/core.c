@@ -5116,6 +5116,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	/* a negative 'switchto_count' indicates end of the chain */
 	rq->ghost.switchto_count = -rq->ghost.switchto_count;
 	WARN_ON_ONCE(rq->ghost.switchto_count > 0);
+	rq->ghost.pnt_bpf_once = true;
 #endif
 
 	/*

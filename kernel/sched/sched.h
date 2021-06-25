@@ -113,6 +113,8 @@ struct ghost_rq {
 	bool must_resched;		/* rq->curr must reschedule in PNT */
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
 	bool skip_latched_preemption;
+	bool pnt_bpf_once;		/* BPF runs at most once in PNT */
+	bool in_pnt_bpf;		/* running BPF at PNT */
 	int ghost_nr_running;
 	int run_flags;			/* flags passed to 'ghost_run()' */
 
@@ -201,6 +203,7 @@ struct ghost_enclave {
 
 #ifdef CONFIG_BPF
 	struct bpf_prog *bpf_tick;
+	struct bpf_prog *bpf_pnt;
 #endif
 };
 
@@ -246,14 +249,24 @@ extern unsigned long ghost_cfs_added_load(struct rq *rq);
 extern int ghost_wake_agent_on_check(int cpu);
 extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
+
+struct rq_flags;
 #ifdef CONFIG_BPF
 extern bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq);
+extern bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
+			  struct rq_flags *rf);
 #else
 static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
 	return false;
 }
+static inline bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
+				 struct rq_flags *rf)
+{
+	return false;
+}
 #endif
+
 extern void ghost_wait_for_rendezvous(struct rq *rq);
 extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);

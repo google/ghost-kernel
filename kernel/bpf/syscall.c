@@ -2005,6 +2005,7 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 	case BPF_PROG_TYPE_GHOST_SCHED:
 		switch (expected_attach_type) {
 		case BPF_GHOST_SCHED_SKIP_TICK:
+		case BPF_GHOST_SCHED_PNT:
 			return 0;
 		default:
 			return -EINVAL;
@@ -2960,6 +2961,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
 	case BPF_GHOST_SCHED_SKIP_TICK:
+	case BPF_GHOST_SCHED_PNT:
 		return BPF_PROG_TYPE_GHOST_SCHED;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;

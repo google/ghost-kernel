@@ -44,6 +44,36 @@ bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 	return BPF_PROG_RUN(prog, &ctx) != 1;
 }
 
+/* Returns true if pick_next_task_ghost should retry its loop. */
+bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
+{
+	struct bpf_ghost_sched_kern ctx = {};
+	struct bpf_prog *prog;
+	int ret;
+
+	lockdep_assert_held(&rq->lock);
+
+	prog = rcu_dereference(e->bpf_pnt);
+	if (!prog)
+		return false;
+
+	/*
+	 * BPF programs attached here may call ghost_run_gtid(), which requires
+	 * that we not hold any RQ locks.  We are called from
+	 * pick_next_task_ghost where it is safe to unlock the RQ.
+	 */
+	rq_unpin_lock(rq, rf);
+	raw_spin_unlock(&rq->lock);
+
+	ret = BPF_PROG_RUN(prog, &ctx);
+
+	raw_spin_lock(&rq->lock);
+	rq_repin_lock(rq, rf);
+
+	/* prog returns 1 meaning "retry". */
+	return ret == 1;
+}
+
 static int ghost_sched_tick_attach(struct ghost_enclave *e,
 				   struct bpf_prog *prog)
 {
@@ -69,6 +99,31 @@ static void ghost_sched_tick_detach(struct ghost_enclave *e,
 	spin_unlock_irqrestore(&e->lock, irq_fl);
 }
 
+static int ghost_sched_pnt_attach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_pnt) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_pnt, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_sched_pnt_detach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_pnt, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
 struct bpf_ghost_sched_link {
 	struct bpf_link	link;
 	struct ghost_enclave *e;
@@ -88,6 +143,9 @@ static void bpf_ghost_sched_link_release(struct bpf_link *link)
 	switch (sc_link->ea_type) {
 	case BPF_GHOST_SCHED_SKIP_TICK:
 		ghost_sched_tick_detach(e, link->prog);
+		break;
+	case BPF_GHOST_SCHED_PNT:
+		ghost_sched_pnt_detach(e, link->prog);
 		break;
 	default:
 		WARN_ONCE(1, "Unexpected release for ea_type %d",
@@ -129,6 +187,7 @@ int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
 
 	switch (ea_type) {
 	case BPF_GHOST_SCHED_SKIP_TICK:
+	case BPF_GHOST_SCHED_PNT:
 		break;
 	default:
 		return -EINVAL;
@@ -168,6 +227,9 @@ int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
 	case BPF_GHOST_SCHED_SKIP_TICK:
 		err = ghost_sched_tick_attach(e, prog);
 		break;
+	case BPF_GHOST_SCHED_PNT:
+		err = ghost_sched_pnt_attach(e, prog);
+		break;
 	default:
 		pr_warn("bad sched bpf ea_type %d, should be unreachable",
 			ea_type);
@@ -190,6 +252,7 @@ int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
 enum ghost_sched_bpf_attach_type {
 	GHOST_SCHED_BPF_INVALID = -1,
 	GHOST_SCHED_BPF_TICK = 0,
+	GHOST_SCHED_BPF_PNT,
 	MAX_SCHED_BPF_ATTACH_TYPE
 };
 
@@ -199,6 +262,8 @@ to_ghost_sched_bpf_attach_type(enum bpf_attach_type attach_type)
 	switch (attach_type) {
 	case BPF_GHOST_SCHED_SKIP_TICK:
 		return GHOST_SCHED_BPF_TICK;
+	case BPF_GHOST_SCHED_PNT:
+		return GHOST_SCHED_BPF_PNT;
 	default:
 		return GHOST_SCHED_BPF_INVALID;
 	}
