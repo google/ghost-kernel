@@ -16,6 +16,19 @@
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 
+BPF_CALL_2(bpf_ghost_wake_agent, struct bpf_ghost_sched_kern *, ctx, u32, cpu)
+{
+	return ghost_wake_agent_on_check(cpu);
+}
+
+static const struct bpf_func_proto bpf_ghost_wake_agent_proto = {
+	.func		= bpf_ghost_wake_agent,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+};
+
 bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
 	struct bpf_ghost_sched_kern ctx = {};
@@ -240,6 +253,8 @@ static const struct bpf_func_proto *
 ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	switch (func_id) {
+	case BPF_FUNC_ghost_wake_agent:
+		return &bpf_ghost_wake_agent_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

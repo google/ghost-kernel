@@ -469,6 +469,7 @@ class PrinterHelpers(Printer):
             'struct bpf_tcp_sock',
             'struct bpf_tunnel_key',
             'struct bpf_xfrm_state',
+            'struct bpf_ghost_sched',
             'struct linux_binprm',
             'struct pt_regs',
             'struct sk_reuseport_md',

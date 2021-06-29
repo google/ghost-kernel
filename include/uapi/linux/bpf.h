@@ -3832,6 +3832,13 @@ union bpf_attr {
  *	Return
  *		A pointer to a struct socket on success or NULL if the file is
  *		not a socket.
+ *
+ * long bpf_ghost_wake_agent(struct bpf_ghost_sched *ctx, u32 cpu)
+ *	Description
+ *		Wakes the ghost agent on *cpu*
+ *
+ *	Return
+ *		0 on success, < 0 on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3997,6 +4004,47 @@ union bpf_attr {
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
+	FN(placeholder_999),		\
+	FN(placeholder_001),		\
+	FN(placeholder_002),		\
+	FN(placeholder_003),		\
+	FN(placeholder_004),		\
+	FN(placeholder_005),		\
+	FN(placeholder_006),		\
+	FN(placeholder_007),		\
+	FN(placeholder_008),		\
+	FN(placeholder_009),		\
+	FN(placeholder_010),		\
+	FN(placeholder_011),		\
+	FN(placeholder_012),		\
+	FN(placeholder_013),		\
+	FN(placeholder_014),		\
+	FN(placeholder_015),		\
+	FN(placeholder_016),		\
+	FN(placeholder_017),		\
+	FN(placeholder_018),		\
+	FN(placeholder_019),		\
+	FN(placeholder_020),		\
+	FN(placeholder_021),		\
+	FN(placeholder_022),		\
+	FN(placeholder_023),		\
+	FN(placeholder_024),		\
+	FN(placeholder_025),		\
+	FN(placeholder_026),		\
+	FN(placeholder_027),		\
+	FN(placeholder_028),		\
+	FN(placeholder_029),		\
+	FN(placeholder_030),		\
+	FN(placeholder_031),		\
+	FN(placeholder_032),		\
+	FN(placeholder_033),		\
+	FN(placeholder_034),		\
+	FN(placeholder_035),		\
+	FN(placeholder_036),		\
+	FN(placeholder_037),		\
+	FN(placeholder_038),		\
+	FN(placeholder_039),		\
+	FN(ghost_wake_agent),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
