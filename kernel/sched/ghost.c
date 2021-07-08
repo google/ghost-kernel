@@ -4254,13 +4254,21 @@ static inline bool same_process(struct task_struct *p, struct task_struct *q)
 	return p->group_leader == q->group_leader;
 }
 
+/*
+ * Checks that the run flags are valid for a ghOSt txn or a ghost_run syscall.
+ */
 static inline bool run_flags_valid(int run_flags, int valid_run_flags,
 				   gtid_t gtid)
 {
 	if (run_flags & ~valid_run_flags)
 		return false;
 
-	if ((run_flags & RTLA_ON_IDLE) && (gtid != GHOST_NULL_GTID))
+	/*
+	 * RTLA_ON_IDLE can be combined with GHOST_NULL_GTID (which is equal to
+	 * 0), but should not be combined with any other special GTIDs.
+	 */
+	BUILD_BUG_ON(GHOST_NULL_GTID != 0);
+	if ((run_flags & RTLA_ON_IDLE) && gtid < 0)
 		return false;
 
 	if ((run_flags & NEED_CPU_NOT_IDLE) && (gtid != GHOST_IDLE_GTID))
