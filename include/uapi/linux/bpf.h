@@ -200,7 +200,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_EXT,
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
-	BPF_PROG_TYPE_SCHEDULER = 35,
+	BPF_PROG_TYPE_GHOST_SCHED = 35,
 };
 
 enum bpf_attach_type {
@@ -242,7 +242,7 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
-	BPF_SCHEDULER_TICK = 50,
+	BPF_GHOST_SCHED_SKIP_TICK = 50,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -5153,7 +5153,7 @@ enum {
 	BTF_F_ZERO	=	(1ULL << 3),
 };
 
-struct bpf_scheduler {
+struct bpf_ghost_sched {
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */

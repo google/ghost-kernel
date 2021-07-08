@@ -7981,7 +7981,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 	case BPF_PROG_TYPE_SK_LOOKUP:
 		range = tnum_range(SK_DROP, SK_PASS);
 		break;
-	case BPF_PROG_TYPE_SCHEDULER:
+	case BPF_PROG_TYPE_GHOST_SCHED:
 		break;
 	case BPF_PROG_TYPE_EXT:
 		/* freplace program can return anything as its return value

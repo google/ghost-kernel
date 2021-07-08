@@ -608,7 +608,39 @@ struct sched_ghost_entity {
 	uint new_task   : 1;
 	uint agent      : 1;
 
+	/*
+	 * Locking of 'twi' is awkward:
+	 * 1. wake_up_new_task: both select_task_rq() and task_woken_ghost()
+	 *    are called with 'pi->lock' held.
+	 * 2. ttwu_do_activate: both select_task_rq() and task_woken_ghost()
+	 *    are called with 'pi->lock' held when called via ttwu_queue()
+	 *    (i.e. not a remote wakeup).
+	 * 3. ttwu_do_activate: only 'rq->lock' is held when called via
+	 *    sched_ttwu_pending (i.e. indirectly via ttwu_queue_remote).
+	 *
+	 * (1) and (2) are easy because 'p->pi_lock' is held across both
+	 * select_task_rq() and task_woken_ghost().
+	 *
+	 * (3) is tricky because 'p->pi_lock' is held when select_task_rq()
+	 * is called on the waker's cpu while 'rq->lock' is held when
+	 * task_woken_ghost() is called on the remote cpu. We rely on the
+	 * following constraints:
+	 * a. Once a task is woken up there cannot be another wakeup until
+	 *    it gets oncpu and blocks (thus another wakeup cannot happen
+	 *    until task_woken_ghost() has been called).
+	 * b. flush_smp_call_function_queue()->llist_del_all() pairs with
+	 *    __ttwu_queue_wakelist()->llist_add() to guarantee visiblity
+	 *    of changes made to 'p->ghost.twi' on the waker's cpu when
+	 *    ttwu_do_activate() is called on the remote cpu.
+	 */
+	struct {
+		int last_ran_cpu;
+		int wake_up_cpu;
+		int waker_cpu;
+	} twi;	/* twi = task_wakeup_info */
+
 	struct list_head task_list;
+	struct rcu_head rcu;
 };
 
 extern void ghost_commit_greedy_txn(void);
@@ -1423,18 +1455,18 @@ struct task_struct {
 	 */
 };
 
-struct bpf_scheduler_kern {
+struct bpf_ghost_sched_kern {
 };
 
 struct bpf_prog;
 union bpf_attr;
 enum bpf_prog_type;
-int scheduler_bpf_prog_attach(const union bpf_attr *attr,
-			      struct bpf_prog *prog);
-int scheduler_bpf_prog_detach(const union bpf_attr *attr,
-			      enum bpf_prog_type ptype);
-int scheduler_bpf_link_attach(const union bpf_attr *attr,
-			      struct bpf_prog *prog);
+int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog);
+int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
+				enum bpf_prog_type ptype);
+int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog);
 
 static inline struct pid *task_pid(struct task_struct *task)
 {

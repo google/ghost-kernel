@@ -66,16 +66,21 @@ static void ghost_task_new(struct rq *rq, struct task_struct *p);
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
 static void ghost_task_blocked(struct rq *rq, struct task_struct *p);
 static void task_dead_ghost(struct task_struct *p);
-static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
-static bool task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
+static void task_deliver_msg_affinity_changed(struct rq *rq,
+					      struct task_struct *p);
+static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
+static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static bool cpu_deliver_msg_tick(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
 static int agent_target_cpu(struct rq *rq);
 static inline bool ghost_txn_ready(int cpu);
+static bool _ghost_commit_pending_txn(int cpu, enum txn_commit_at where);
+static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err);
 static void ghost_commit_all_greedy_txns(void);
 static void ghost_commit_pending_txn(enum txn_commit_at where);
 static inline int queue_decref(struct ghost_queue *q);
 static void release_from_ghost(struct rq *rq, struct task_struct *p);
+static void ghost_wake_agent_on(int cpu);
 
 struct rq *context_switch(struct rq *rq, struct task_struct *prev,
 			  struct task_struct *next, struct rq_flags *rf);
@@ -88,6 +93,28 @@ static void __enclave_remove_task(struct ghost_enclave *e,
 				  struct task_struct *p);
 static int __sw_region_free(struct ghost_sw_region *region);
 static const struct file_operations queue_fops;
+
+/* enclave::is_dying */
+#define ENCLAVE_IS_DYING	(1U << 0)
+#define ENCLAVE_IS_REAPABLE	(1U << 1)
+
+static inline bool enclave_is_dying(struct ghost_enclave *e)
+{
+	lockdep_assert_held(&e->lock);
+
+	return e->is_dying & ENCLAVE_IS_DYING;
+}
+
+static inline bool enclave_is_reapable(struct ghost_enclave *e)
+{
+	lockdep_assert_held(&e->lock);
+
+	if (e->is_dying & ENCLAVE_IS_REAPABLE) {
+		WARN_ON_ONCE(!enclave_is_dying(e));
+		return true;
+	}
+	return false;
+}
 
 /*
  * There are certain things we can't do in the scheduler while holding rq locks
@@ -192,6 +219,7 @@ static void submit_enclave_work(struct ghost_enclave *e, struct rq *rq,
 	bool need_work = false;
 
 	VM_BUG_ON(nr_decrefs < 0);
+	WARN_ON_ONCE(run_task_reaper && !enclave_is_reapable(e));
 
 	lockdep_assert_held(&rq->lock);
 	lockdep_assert_held(&e->lock);
@@ -329,8 +357,36 @@ static inline void invalidate_cached_tasks(struct rq *rq, struct task_struct *p)
 {
 	lockdep_assert_held(&rq->lock);
 
-	if (unlikely(rq->ghost.latched_task == p))
-		rq->ghost.latched_task = NULL;
+	if (unlikely(rq->ghost.latched_task == p)) {
+		if (rq->ghost.skip_latched_preemption) {
+			/*
+			 * We cannot produce a TASK_PREEMPT msg here.
+			 *
+			 * This is called via ghost_move_task() during txn
+			 * commit after validating the task to be committed.
+			 * Thus if we produce a TASK_PREEMPT msg it won't be
+			 * caught by the task->barrier and prevent the txn
+			 * from committing.
+			 *
+			 * Then it is possible to observe back-to-back
+			 * TASK_PREEMPT msgs in the agent (the second
+			 * would be due to a real preemption) which will
+			 * trigger a 'task->preempted' CHECK-fail in the agent.
+			 */
+			rq->ghost.latched_task = NULL;
+		} else {
+			/*
+			 * This is called via non-ghost move_queued_task()
+			 * callers (e.g. sched_setaffinity). We produce a
+			 * TASK_PREEMPT msg to let the agent know that the
+			 * task is no longer latched (without this the task
+			 * would be stranded).
+			 */
+			ghost_latched_task_preempted(rq);
+		}
+	}
+
+	rq->ghost.skip_latched_preemption = false;
 }
 
 static inline bool is_cached_task(struct rq *rq, struct task_struct *p)
@@ -386,7 +442,7 @@ static inline void force_offcpu(struct rq *rq, bool resched)
 	schedule_next(rq, GHOST_NULL_GTID, resched);
 }
 
-static void update_curr_ghost(struct rq *rq)
+static void __update_curr_ghost(struct rq *rq, bool update_sw)
 {
 	struct task_struct *curr = rq->curr;
 	struct ghost_status_word *sw = curr->ghost.status_word;
@@ -406,15 +462,20 @@ static void update_curr_ghost(struct rq *rq)
 
 	now = rq_clock_task(rq);
 	delta = now - curr->se.exec_start;
-	if (unlikely((s64)delta <= 0))
-		return;
+	if ((s64)delta > 0) {
+		curr->se.sum_exec_runtime += delta;
+		account_group_exec_runtime(curr, delta);
+		cgroup_account_cputime(curr, delta);
+		curr->se.exec_start = now;
+	}
 
-	curr->se.sum_exec_runtime += delta;
-	account_group_exec_runtime(curr, delta);
-	cgroup_account_cputime(curr, delta);
-	curr->se.exec_start = now;
+	if (update_sw)
+		WRITE_ONCE(sw->runtime, curr->se.sum_exec_runtime);
+}
 
-	WRITE_ONCE(sw->runtime, curr->se.sum_exec_runtime);
+static void update_curr_ghost(struct rq *rq)
+{
+	__update_curr_ghost(rq, true);
 }
 
 static void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
@@ -435,8 +496,10 @@ static void switched_to_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_status_word *status_word = p->ghost.status_word;
 
-	if (task_running(rq, p))
+	if (task_running(rq, p)) {
+		ghost_sw_set_time(status_word, ktime_get_ns());
 		ghost_sw_set_flag(status_word, GHOST_SW_TASK_ONCPU);
+	}
 
 	if (task_on_rq_queued(p))
 		ghost_sw_set_flag(status_word, GHOST_SW_TASK_RUNNABLE);
@@ -659,7 +722,7 @@ void ghost_tick(struct rq *rq)
  * Called from the timer tick handler while holding the rq->lock.  Called only
  * if a ghost task is current.
  */
-void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
+static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 {
 	struct task_struct *agent = rq->ghost.agent;
 
@@ -671,7 +734,7 @@ void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 	if (unlikely(!agent))
 		return;
 
-	update_curr_ghost(rq);
+	__update_curr_ghost(rq, false);
 
 	if (cpu_deliver_msg_tick(rq))
 		ghost_wake_agent_on(agent_target_cpu(rq));
@@ -708,11 +771,13 @@ static int balance_ghost(struct rq *rq, struct task_struct *prev,
 	return rq->ghost.latched_task || rq_adj_nr_running(rq);
 }
 
-int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
+static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
+	int waker_cpu = smp_processor_id();
+
 	/* For anything but wake ups, just return the task_cpu */
 	if (!(wake_flags & (WF_TTWU | WF_FORK)))
-		goto out;
+		return task_cpu(p);
 
 	/*
 	 * We have at least a couple of obvious choices here:
@@ -736,9 +801,14 @@ int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 	 * and the default is to keep the task on the same CPU it last ran on.
 	 */
 	if (sysctl_ghost_wake_on_waker_cpu)
-		return smp_processor_id();
-out:
-	return task_cpu(p);
+		p->ghost.twi.wake_up_cpu = waker_cpu;
+	else
+		p->ghost.twi.wake_up_cpu = task_cpu(p);
+
+	p->ghost.twi.waker_cpu = waker_cpu;
+	p->ghost.twi.last_ran_cpu = task_cpu(p);
+
+	return p->ghost.twi.wake_up_cpu;
 }
 
 static inline bool task_is_dead(struct rq *rq, struct task_struct *p)
@@ -794,7 +864,8 @@ static int validate_next_task(struct rq *rq, struct task_struct *next,
 	return 0;
 }
 
-int validate_next_offcpu(struct rq *rq, struct task_struct *next, int *state)
+static int validate_next_offcpu(struct rq *rq, struct task_struct *next,
+				int *state)
 {
 	lockdep_assert_held(&rq->lock);
 
@@ -864,6 +935,7 @@ static inline void ghost_prepare_switch(struct rq *rq, struct task_struct *prev,
 			next->se.exec_start = rq_clock_task(rq);
 			sw = next->ghost.status_word;
 			WARN_ON_ONCE(sw->flags & GHOST_SW_TASK_ONCPU);
+			ghost_sw_set_time(sw, ktime_get_ns());
 			ghost_sw_set_flag(sw, GHOST_SW_TASK_ONCPU);
 		} else {
 			WARN_ON_ONCE(rq->ghost.must_resched &&
@@ -932,102 +1004,104 @@ bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev)
 
 void ghost_latched_task_preempted(struct rq *rq)
 {
-       struct task_struct *latched = rq->ghost.latched_task;
+	struct task_struct *latched = rq->ghost.latched_task;
 
-       WARN_ON_ONCE(!rq->ghost.agent);
+	WARN_ON_ONCE(!rq->ghost.agent);
 
-       if (task_has_ghost_policy(latched)) {
-               ghost_task_preempted(rq, latched);
-               ghost_wake_agent_of(latched);
-       } else {
-               /*
-                * Idle task was latched and agent must have made
-                * other arrangements to be notified that CPU is
-                * no longer idle (for e.g. NEED_CPU_NOT_IDLE).
-                */
-               WARN_ON_ONCE(latched != rq->idle);
-       }
-       rq->ghost.latched_task = NULL;
+	if (task_has_ghost_policy(latched)) {
+		ghost_task_preempted(rq, latched);
+		ghost_wake_agent_of(latched);
+	} else {
+		/*
+		 * Idle task was latched and agent must have made
+		 * other arrangements to be notified that CPU is
+		 * no longer idle (for e.g. NEED_CPU_NOT_IDLE).
+		 */
+		WARN_ON_ONCE(latched != rq->idle);
+	}
+	rq->ghost.latched_task = NULL;
 }
 
 static inline void ghost_update_boost_prio(struct task_struct *p,
-                                          bool preempted)
+					   bool preempted)
 {
-       if (preempted)
-               ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_BOOST_PRIO);
-       else
-               ghost_sw_clear_flag(p->ghost.status_word, GHOST_SW_BOOST_PRIO);
+	if (preempted)
+		ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_BOOST_PRIO);
+	else
+		ghost_sw_clear_flag(p->ghost.status_word, GHOST_SW_BOOST_PRIO);
 }
 
 static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 {
 	struct task_struct *agent = rq->ghost.agent;
-       struct task_struct *next = NULL;
-       bool preempted;
+	struct task_struct *next = NULL;
+	int nr_running;
+	bool preempted;
 	struct task_struct *prev = rq->curr;
 
 	if (!agent || !agent->on_rq)
-	    goto done;
+		goto done;
 
-       /*
-        * Evaluate after produce_prev_msgs() in case it wakes up the local
-        * agent.
-        */
+	/*
+	 * Evaluate after produce_prev_msgs() in case it wakes up the local
+	 * agent.
+	 */
 	next = pick_agent(rq);
 
-       /*
-        * 'preempted' is true if a higher priority sched_class (e.g. CFS)
-        * has runnable tasks. We use it as follows:
-        *
-        * 1. indicate via GHOST_SW_BOOST_PRIO that the agent must yield
-        *    the CPU asap.
-        *
-        * 2. produce a TASK_PREEMPTED msg on behalf of 'prev' (note that the
-        *    TASK_PREEMPTED msg could trigger a local agent wakeup; producing
-        *    the msg here as opposed to after pick_next_task() allows us to
-        *    eliminate one redundant context switch from 'ghost->CFS->agent'
-        *    to 'ghost->agent'.
-        */
-       WARN_ON_ONCE(rq->nr_running < rq->ghost.ghost_nr_running);
-       preempted = (rq->nr_running > rq->ghost.ghost_nr_running);
+	/*
+	 * 'preempted' is true if a higher priority sched_class (e.g. CFS)
+	 * has runnable tasks. We use it as follows:
+	 *
+	 * 1. indicate via GHOST_SW_BOOST_PRIO that the agent must yield
+	 *    the CPU asap.
+	 *
+	 * 2. produce a TASK_PREEMPTED msg on behalf of 'prev' (note that the
+	 *    TASK_PREEMPTED msg could trigger a local agent wakeup; producing
+	 *    the msg here as opposed to after pick_next_task() allows us to
+	 *    eliminate one redundant context switch from 'ghost->CFS->agent'
+	 *    to 'ghost->agent'.
+	 */
+	nr_running = rq->nr_running;
+	WARN_ON_ONCE(nr_running < rq->ghost.ghost_nr_running);
+	preempted = (nr_running > rq->ghost.ghost_nr_running);
 
-       if (rq->ghost.check_prev_preemption) {
-               if (next || preempted) {
-                       /*
-                        * Preempted by local agent or another sched_class.
-                        *
-                        * Paranoia: force_offcpu guarantees that 'prev' does
-                        * not stay oncpu after producing TASK_PREEMPTED(prev).
-                        */
-                       ghost_task_preempted(rq, prev);
-                       ghost_wake_agent_of(prev);
-                       force_offcpu(rq, false);
-                       rq->ghost.check_prev_preemption = false;
+	if (rq->ghost.check_prev_preemption) {
+		if (next || preempted) {
+			/*
+			 * Preempted by local agent or another sched_class.
+			 *
+			 * Paranoia: force_offcpu guarantees that 'prev' does
+			 * not stay oncpu after producing TASK_PREEMPTED(prev).
+			 */
+			ghost_task_preempted(rq, prev);
+			ghost_wake_agent_of(prev);
+			force_offcpu(rq, false);
+			rq->ghost.check_prev_preemption = false;
 
-                       /* did the preemption msg wake up the local agent? */
-                       if (!next)
-                               next = pick_agent(rq);
-               }
-       }
+			/* did the preemption msg wake up the local agent? */
+			if (!next)
+				next = pick_agent(rq);
+		}
+	}
 
-       /*
-        * CPU is switching to a non-ghost task while a task is latched.
-        *
-        * Treat this like latched_task preemption because we don't know when
-        * the CPU will be available again so no point in keeping it latched.
-        */
-       if (rq->ghost.latched_task && preempted) {
-               ghost_latched_task_preempted(rq);
+	/*
+	 * CPU is switching to a non-ghost task while a task is latched.
+	 *
+	 * Treat this like latched_task preemption because we don't know when
+	 * the CPU will be available again so no point in keeping it latched.
+	 */
+	if (rq->ghost.latched_task && preempted) {
+		 ghost_latched_task_preempted(rq);
 
-               /* did the preemption msg wake up the local agent? */
-               if (!next)
-                       next = pick_agent(rq);
-       }
+		/* did the preemption msg wake up the local agent? */
+		if (!next)
+			next = pick_agent(rq);
+	 }
 
-       if (!next)
-               goto done;
+	if (!next)
+		goto done;
 
-       ghost_update_boost_prio(next, preempted);
+	ghost_update_boost_prio(next, preempted);
 	ghost_prepare_switch(rq, prev, next);
 
 done:
@@ -1235,11 +1309,32 @@ static void yield_task_ghost(struct rq *rq)
 static void set_cpus_allowed_ghost(struct task_struct *p,
 				   const struct cpumask *newmask, u32 flags)
 {
+	struct rq_flags rf;
+	struct rq *rq = task_rq(p);
+	bool locked = false;
+
 	/*
 	 * Agents: not allowed (rejected in __set_cpus_allowed_ptr);
-	 * Normal ghost tasks: WARN until we figure out what to do here.
+	 * Normal ghost tasks: Notify the agents.
 	 */
-	WARN_ON_ONCE(1);
+	WARN_ON_ONCE(is_agent(rq, p));
+
+	/*
+	 * do_set_cpus_allowed() mentions a case where we could arrive here
+	 * without the rq->lock held, but message delivery requires rq->lock
+	 * held.
+	 */
+	if (!raw_spin_is_locked(&rq->lock)) {
+		__task_rq_lock(p, &rf);
+		locked = true;
+	}
+
+	task_deliver_msg_affinity_changed(rq, p);
+
+	if (locked)
+		__task_rq_unlock(rq, &rf);
+
+	set_cpus_allowed_common(p, newmask, flags);
 }
 
 static void task_woken_ghost(struct rq *rq, struct task_struct *p)
@@ -1319,6 +1414,16 @@ static struct rq *ghost_move_task(struct rq *rq, struct task_struct *next,
 {
 	lockdep_assert_held(&rq->lock);
 	lockdep_assert_held(&next->pi_lock);
+
+	WARN_ON_ONCE(rq->ghost.skip_latched_preemption);
+
+	/*
+	 * Cleared in invalidate_cached_tasks() via move_queued_task()
+	 * and dequeue_task_ghost(). We cannot clear it here because
+	 * move_queued_task() will release rq->lock (the rq returned
+	 * by move_queued_task() is different than the one passed in).
+	 */
+	rq->ghost.skip_latched_preemption = true;
 
 	/*
 	 * 'next' was enqueued on a different CPU than where the agent
@@ -1594,7 +1699,8 @@ static void enclave_reap_tasks(struct work_struct *work)
 	static const struct sched_param param = { .sched_priority = 0 };
 
 	spin_lock_irqsave(&e->lock, irq_fl);
-	WARN_ON_ONCE(!e->is_dying);
+	WARN_ON_ONCE(!enclave_is_reapable(e));
+
 	/*
 	 * The moment we unlock, the task could exit.  We can't lock the task
 	 * either, since the lock ordering is pi_lock->e_lock.  Once we let go
@@ -1710,11 +1816,12 @@ void ghost_destroy_enclave(struct ghost_enclave *e)
 	int cpu;
 
 	spin_lock_irqsave(&e->lock, flags);
-	if (e->is_dying) {
+	if (enclave_is_dying(e)) {
 		spin_unlock_irqrestore(&e->lock, flags);
 		return;
 	}
-	e->is_dying = true;
+	/* Don't accept new agents into the enclave or changes to its cpuset */
+	e->is_dying = ENCLAVE_IS_DYING;
 
 	/*
 	 * At this point, no one can change the cpus or add new agents, since
@@ -1785,14 +1892,29 @@ void ghost_destroy_enclave(struct ghost_enclave *e)
 		put_task_struct(agent);
 		spin_lock_irqsave(&e->lock, flags);
 	}
+	spin_unlock_irqrestore(&e->lock, flags);
 
+	synchronize_rcu();	/* Required after unpublishing a cpu */
+
+	/*
+	 * It is safe to reap all tasks in the enclave only _after_
+	 * synchronize_rcu returns: we have unpublished the enclave cpus
+	 * and synchronize_rcu() guarantees that any older rcu read-side
+	 * critical sections in find_task_by_gtid() have completed.
+	 *
+	 * Since 'e->lock' is dropped before synchronize_rcu we must
+	 * prevent enclave_add_task() from sneaking in and scheduling
+	 * the task reaper before synchronize_rcu returns.
+	 *
+	 * This is indicated by or'ing ENCLAVE_IS_REAPABLE into 'e->is_dying'.
+	 */
+	spin_lock_irqsave(&e->lock, flags);
+	e->is_dying |= ENCLAVE_IS_REAPABLE;
 	spin_unlock_irqrestore(&e->lock, flags);
 
 	kref_get(&e->kref);	/* Reaper gets a kref */
 	if (!schedule_work(&e->task_reaper))
 		kref_put(&e->kref, enclave_release);
-
-	synchronize_rcu();	/* Required after unpublishing a cpu */
 
 	/*
 	 * Removes the enclave and all of its files from ghostfs.  There may
@@ -1825,7 +1947,7 @@ int ghost_enclave_set_cpus(struct ghost_enclave *e, const struct cpumask *cpus)
 
 	spin_lock_irqsave(&e->lock, flags);
 
-	if (e->is_dying) {
+	if (enclave_is_dying(e)) {
 		ret = -EXDEV;
 		goto out_e;
 	}
@@ -1930,7 +2052,7 @@ static void enclave_add_task(struct ghost_enclave *e, struct task_struct *p)
 	if (p->ghost.agent)
 		return;
 	spin_lock_irqsave(&e->lock, flags);
-	if (e->is_dying) {
+	if (enclave_is_reapable(e)) {
 		/*
 		 * The task entered as the enclave was dying, and likely will
 		 * miss the reaper.
@@ -1939,6 +2061,7 @@ static void enclave_add_task(struct ghost_enclave *e, struct task_struct *p)
 	}
 	WARN_ON_ONCE(!list_empty(&p->ghost.task_list));
 	list_add_tail(&p->ghost.task_list, &e->task_list);
+	e->nr_tasks++;
 	spin_unlock_irqrestore(&e->lock, flags);
 }
 
@@ -1952,6 +2075,7 @@ static void __enclave_remove_task(struct ghost_enclave *e,
 		return;
 	WARN_ON_ONCE(list_empty(&p->ghost.task_list));
 	list_del_init(&p->ghost.task_list);
+	e->nr_tasks--;
 }
 
 static void enclave_add_sw_region(struct ghost_enclave *e,
@@ -2125,22 +2249,22 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	 * enclave's kref.  However, it is possible for the enclave to die
 	 * before we get enqueued (see uses of `new_task` and ghost_task_new()).
 	 */
-	if (e->is_dying) {
+	if (enclave_is_dying(e)) {
 		error = -EXDEV;
 		goto done;
 	}
-	if (!q) {
+	if (q) {
 		/*
-		 * Associate task with the default queue.  Agents typically pass
-		 * in their own queue.
+		 * It's possible for a client task to have no queue: it may have
+		 * arrived before an agent set the default queue during an agent
+		 * update.
+		 *
+		 * However, agent tasks should have provided some queue: either
+		 * explicitly or the default queue.  We handle this case in
+		 * ghost_prep_agent().
 		 */
-		q = e->def_q;
+		queue_incref(q);
 	}
-	if (!q) {
-		error = -ENXIO;
-		goto done;
-	}
-	queue_incref(q);
 	p->ghost.dst_q = q;
 
 	/* Allocate a status_word */
@@ -2271,7 +2395,7 @@ static int ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	unsigned long irq_fl;
 
 	spin_lock_irqsave(&e->lock, irq_fl);
-	error = __ghost_prep_task(e, p, /*q=*/NULL, forked);
+	error = __ghost_prep_task(e, p, e->def_q, forked);
 	spin_unlock_irqrestore(&e->lock, irq_fl);
 
 	return error;
@@ -2297,12 +2421,35 @@ static int ghost_prep_agent(struct ghost_enclave *e, struct task_struct *p,
 	if (rq->ghost.agent != NULL)
 		return -EBUSY;
 
+	/*
+	 * Clean up old transactions.  Once this cpu has an agent, an old
+	 * transaction could succeed and turn into a latched task and start
+	 * running.
+	 *
+	 * You may be wondering why we do this here in addition to when the old
+	 * agent exited.  It's possible for a global agent from an older agent
+	 * process to write a transaction *after* that cpu's agent task exited.
+	 */
+	ghost_claim_and_kill_txn(rq->cpu, GHOST_TXN_NO_AGENT);
+
 	/* We hold the rq lock, which is already irqsaved. */
 	spin_lock(&e->lock);
 
 	if (!cpumask_test_cpu(rq->cpu, &e->cpus)) {
 		ret = -ENODEV;
 		goto out;
+	}
+	if (!q) {
+		/*
+		 * Agents typically pass in their own queue, but if not they get
+		 * the def_q (typically for tests).  But they must have *some*
+		 * queue.
+		 */
+		if (!e->def_q) {
+			ret = -ENXIO;
+			goto out;
+		}
+		q = e->def_q;
 	}
 
 	ret = __ghost_prep_task(e, p, q, /*forked=*/false);
@@ -2707,6 +2854,33 @@ static struct task_struct *find_task_by_gtid(gtid_t gtid)
 		return current;
 
 	p = find_task_by_pid_ns(pid, &init_pid_ns);
+
+	/*
+	 * It is possible for a task to schedule after losing its identity
+	 * during exit (do_exit -> unhash_process -> detach_pid -> free_pid).
+	 *
+	 * Since the agent identifies tasks to schedule using a 'gtid' we
+	 * must provide an alternate lookup path so the dying task can be
+	 * scheduled and properly die.
+	 */
+	if (unlikely(!p)) {
+		ulong flags;
+		struct task_struct *t;
+		struct ghost_enclave *e;
+
+		e = rcu_dereference(per_cpu(enclave, smp_processor_id()));
+		if (WARN_ON_ONCE(!e))
+			return NULL;
+
+		spin_lock_irqsave(&e->lock, flags);
+		list_for_each_entry(t, &e->task_list, ghost.task_list) {
+			if (t->gtid == gtid) {
+				p = t;
+				break;
+			}
+		}
+		spin_unlock_irqrestore(&e->lock, flags);
+	}
 	if (!p)
 		return NULL;
 
@@ -2714,6 +2888,26 @@ static struct task_struct *find_task_by_gtid(gtid_t gtid)
 	if (p->gtid != gtid)
 		return NULL;
 
+	/*
+	 * We rely on rcu to guarantee stability of 'p':
+	 *
+	 * If 'p' was obtained via find_task_by_pid_ns() then release_task()
+	 * waits for an rcu grace period via call_rcu(delayed_put_task_struct).
+	 * This includes the case where userspace moves a task out of ghost
+	 * via sched_setscheduler(2).
+	 *
+	 * If 'p' was obtained via enclave->task_list then we need to account
+	 * for the task dying or moving out of the ghost sched_class when its
+	 * enclave is destroyed.
+	 *
+	 * A dying task ensures that the task_struct will remain stable for
+	 * an rcu grace period via call_rcu(ghost_delayed_put_task_struct).
+	 *
+	 * A dying enclave will synchronize_rcu() in ghost_destroy_enclave()
+	 * before moving its tasks out of ghost (we don't use call_rcu() here
+	 * because the task may transition in and out of ghost any number of
+	 * times independent of call_rcu() invocation).
+	 */
 	return p;
 }
 
@@ -3221,7 +3415,6 @@ static int _produce(struct ghost_queue *q, uint32_t barrier, int type,
 static inline int produce_for_task(struct task_struct *p, int type,
 				   void *payload, int payload_size)
 {
-	task_barrier_inc(task_rq(p), p);
 	return _produce(p->ghost.dst_q, task_barrier_get(p),
 			type, payload, payload_size);
 }
@@ -3264,11 +3457,17 @@ static inline bool cpu_skip_message(struct rq *rq)
 static inline bool cpu_deliver_msg_tick(struct rq *rq)
 {
 	struct ghost_msg_payload_cpu_tick payload;
+	struct ghost_enclave *e;
 
 	if (cpu_skip_message(rq))
 		return false;
-	if (bpf_sched_ghost_skip_tick())
+	rcu_read_lock();
+	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
+	if (!e || ghost_bpf_skip_tick(e, rq)) {
+		rcu_read_unlock();
 		return false;
+	}
+	rcu_read_unlock();
 
 	payload.cpu = cpu_of(rq);
 
@@ -3321,9 +3520,16 @@ static bool ghost_in_switchto(struct rq *rq)
 	return rq->ghost.switchto_count ? true : false;
 }
 
-static inline bool task_skip_message(struct rq *rq, struct task_struct *p)
+/*
+ * Returns 0 if we should produce a message for the task, < 0 otherwise.
+ *
+ * If the task is not an agent, this will task_barrier_inc(), even if we should
+ * not produce a message.
+ */
+static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 {
 	lockdep_assert_held(&rq->lock);
+
 	/*
 	 * Ignore the agent's task_state changes.
 	 *
@@ -3331,20 +3537,35 @@ static inline bool task_skip_message(struct rq *rq, struct task_struct *p)
 	 * it's not runnable.
 	 */
 	if (unlikely(is_agent(rq, p)))
-		return true;
+		return -1;
 
-	if (WARN_ON_ONCE(!p->ghost.dst_q))
-		return true;
+	/*
+	 * Increment the barrier even if we are not going to send a message due
+	 * to a missing queue, since the barrier protects some parts of the SW's
+	 * state.
+	 *
+	 * Normally, this would be unsafe, since the barrier technically
+	 * protects the messages, and userspace could be confused because it
+	 * sees the barrier, but cannot see the message.  However, since p has
+	 * no dst_q, it has not been associated yet, which means no scheduler
+	 * is operating on it.  This can happen if a task arrives before an
+	 * agent sets the enclave's default queue.  The agent will associate
+	 * that task during task Discovery.
+	 */
+	task_barrier_inc(rq, p);
 
-	return false;
+	if (!p->ghost.dst_q)
+		return -1;
+
+	return 0;
 }
 
-static bool task_deliver_msg_task_new(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_new payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.runnable = task_on_rq_queued(p);
@@ -3352,76 +3573,74 @@ static bool task_deliver_msg_task_new(struct rq *rq, struct task_struct *p)
 	if (_get_sw_info(p->ghost.enclave, p->ghost.status_word,
 			&payload.sw_info)) {
 		WARN(1, "New task PID %d didn't have a status word!", p->pid);
-		return false;
+		return;
 	}
 
-	return !produce_for_task(p, MSG_TASK_NEW, &payload, sizeof(payload));
+	produce_for_task(p, MSG_TASK_NEW, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 {
 
 	struct ghost_msg_payload_task_yield payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 	payload.from_switchto = ghost_in_switchto(rq);
 
-	return !produce_for_task(p, MSG_TASK_YIELD, &payload, sizeof(payload));
+	produce_for_task(p, MSG_TASK_YIELD, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_preempt(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_preempt payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 	payload.from_switchto = ghost_in_switchto(rq);
 
-	return !produce_for_task(p, MSG_TASK_PREEMPT, &payload,
-				 sizeof(payload));
+	produce_for_task(p, MSG_TASK_PREEMPT, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_blocked payload = {.gtid = gtid(p)};
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 	payload.from_switchto = ghost_in_switchto(rq);
 
-	return !produce_for_task(p, MSG_TASK_BLOCKED, &payload,
-				 sizeof(payload));
+	produce_for_task(p, MSG_TASK_BLOCKED, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_dead payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
-	return !produce_for_task(p, MSG_TASK_DEAD, &payload, sizeof(payload));
+	produce_for_task(p, MSG_TASK_DEAD, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_departed payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.cpu = cpu_of(rq);
@@ -3430,8 +3649,22 @@ static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 	else
 		payload.from_switchto = false;
 
-	return !produce_for_task(p, MSG_TASK_DEPARTED, &payload,
+	produce_for_task(p, MSG_TASK_DEPARTED, &payload,
 				 sizeof(payload));
+}
+
+static void task_deliver_msg_affinity_changed(struct rq *rq,
+					      struct task_struct *p)
+{
+	struct ghost_msg_payload_task_affinity_changed payload;
+
+	if (__task_deliver_common(rq, p))
+		return;
+
+	payload.gtid = gtid(p);
+
+	produce_for_task(p, MSG_TASK_AFFINITY_CHANGED, &payload,
+			 sizeof(payload));
 }
 
 static inline bool deferrable_wakeup(struct task_struct *p)
@@ -3448,37 +3681,38 @@ static inline bool deferrable_wakeup(struct task_struct *p)
 	return p->sched_deferrable_wakeup;
 }
 
-static bool task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_wakeup payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.deferrable = deferrable_wakeup(p);
-	return !produce_for_task(p, MSG_TASK_WAKEUP, &payload, sizeof(payload));
+	payload.last_ran_cpu = p->ghost.twi.last_ran_cpu;
+	payload.wake_up_cpu = p->ghost.twi.wake_up_cpu;
+	payload.waker_cpu = p->ghost.twi.waker_cpu;
+	produce_for_task(p, MSG_TASK_WAKEUP, &payload, sizeof(payload));
 }
 
-static bool task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_msg_payload_task_switchto payload;
 
-	if (task_skip_message(rq, p))
-		return false;
+	if (__task_deliver_common(rq, p))
+		return;
 
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 
-	return !produce_for_task(p, MSG_TASK_SWITCHTO, &payload,
-				 sizeof(payload));
+	produce_for_task(p, MSG_TASK_SWITCHTO, &payload, sizeof(payload));
 }
 
 static void release_from_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_enclave *e = p->ghost.enclave;
-	bool wake_agent;
 	ulong flags;
 
 	VM_BUG_ON(!e);
@@ -3505,9 +3739,9 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 	 */
 	ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_F_CANFREE);
 	if (p->state == TASK_DEAD)
-		wake_agent = task_deliver_msg_dead(rq, p);
+		task_deliver_msg_dead(rq, p);
 	else
-		wake_agent = task_deliver_msg_departed(rq, p);
+		task_deliver_msg_departed(rq, p);
 
 	/* status_word is off-limits to the kernel */
 	p->ghost.status_word = NULL;
@@ -3520,7 +3754,32 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		WRITE_ONCE(rq->ghost.agent_barrier, 0);
 		p->ghost.agent = false;
 		VM_BUG_ON(rq->ghost.blocked_in_run);
-		VM_BUG_ON(wake_agent);
+
+		/*
+		 * Unlatched any tasks that had been committed.  Latched tasks
+		 * will be selected in PNT after a new agent attaches, which
+		 * violates the quiescence needed by in-place agent handoffs.
+		 * Now that ghost.agent is NULL, any new transactions will fail.
+		 *
+		 * If the only concern is running a latched task, we could wait
+		 * to clear latched_task until a new agent attaches, since PNT
+		 * won't pick the latched_task unless there is an agent.
+		 * However, it's possible that the agent process is trying to
+		 * shrink its enclave: stop the agent, then remove the cpu,
+		 * without killing the entire agent.  So we might never attach
+		 * an old agent.  This is also why we use a preemption instead
+		 * of invalidate_cached_tasks: preempt the committed task and
+		 * let the agent (if there is one) handle it.
+		 */
+		if (rq->ghost.latched_task)
+			ghost_latched_task_preempted(rq);
+		/*
+		 * Clean up any pending transactions.  We need to do this here,
+		 * in addition to in setsched, since the global agent may be
+		 * spinning waiting for this transaction to return before it
+		 * gracefully exits.
+		 */
+		ghost_claim_and_kill_txn(rq->cpu, GHOST_TXN_NO_AGENT);
 
 		/* See ghost_destroy_enclave() */
 		if (rq->ghost.agent_remove_enclave_cpu) {
@@ -3540,13 +3799,20 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 
 	spin_unlock_irqrestore(&e->lock, flags);
 
-	if (wake_agent)
-		ghost_wake_agent_of(p);
+	ghost_wake_agent_of(p);
 
 	/* Release reference to 'dst_q' */
-	VM_BUG_ON(!p->ghost.dst_q);
-	queue_decref(p->ghost.dst_q);
-	p->ghost.dst_q = NULL;
+	if (p->ghost.dst_q) {
+		queue_decref(p->ghost.dst_q);
+		p->ghost.dst_q = NULL;
+	}
+}
+
+static void ghost_delayed_put_task_struct(struct rcu_head *rhp)
+{
+	struct task_struct *tsk = container_of(rhp, struct task_struct,
+					       ghost.rcu);
+	put_task_struct(tsk);
 }
 
 static void task_dead_ghost(struct task_struct *p)
@@ -3561,6 +3827,23 @@ static void task_dead_ghost(struct task_struct *p)
 	release_from_ghost(rq, p);
 	head = splice_balance_callbacks(rq);
 	task_rq_unlock(rq, p, &rf);
+
+	/*
+	 * 'p' is dead and the last reference to its task_struct may be
+	 * dropped after returning from this function (see finish_task_switch).
+	 *
+	 * We need to drain all rcu-protected callers of find_task_by_gtid()
+	 * before returning from this function. Typically this would happen
+	 * via delayed_put_task_struct() called by release_task() but since
+	 * we provide an alternate gtid lookup that bypasses find_task_by_pid()
+	 * we cannot rely on that.
+	 *
+	 * Note that we cannot call synchronize_rcu() directly because this
+	 * function is called in a non-preemptible context.
+	 */
+	get_task_struct(p);
+	call_rcu(&p->ghost.rcu, ghost_delayed_put_task_struct);
+
 	/*
 	 * 'rq_pin_lock' issues a warning when the there are pending callback
 	 * functions for the runqueue. The point of this warning is to ensure
@@ -3606,7 +3889,7 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
  *
  * If it was blocked_in_run, clear it and reschedule, which ensures it wakes up.
  */
-void ghost_wake_agent_on(int cpu)
+static void ghost_wake_agent_on(int cpu)
 {
 	struct rq *dst_rq;
 
@@ -4391,6 +4674,12 @@ static inline struct ghost_txn *_ghost_get_txn_ptr(int cpu)
 static inline void _ghost_set_txn_state(struct ghost_txn *txn,
 					enum ghost_txn_state state)
 {
+	/*
+	 * Set the time with a relaxed store since we update the txn state below
+	 * with a release store. Userspace syncs with the kernel on that release
+	 * store, so the release store acts a barrier.
+	 */
+	txn->commit_time = ktime_get_ns();
 	smp_store_release(&txn->state, state);
 }
 
@@ -4405,6 +4694,20 @@ static void ghost_set_txn_state(int cpu, enum ghost_txn_state state)
 static inline void ghost_poison_txn(int cpu)
 {
 	ghost_set_txn_state(cpu, GHOST_TXN_POISONED);
+}
+
+static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err)
+{
+	/* claim_txn and set_txn_state must be called by the same cpu */
+	preempt_disable();
+
+	rcu_read_lock();
+	if (unlikely(ghost_claim_txn(cpu, -1)))
+		ghost_set_txn_state(cpu, err);
+	rcu_read_unlock();
+
+	/* We're often called from within the scheduler */
+	preempt_enable_no_resched();
 }
 
 static inline bool ghost_txn_succeeded(int state)
@@ -5105,6 +5408,7 @@ void ghost_switchto(struct rq *rq, struct task_struct *prev,
 
 	list_add_tail(&next->ghost.run_list, &rq->ghost.tasks);
 	next->ghost.last_runnable_at = 0;	/* we're on_cpu */
+	ghost_sw_set_time(next->ghost.status_word, ktime_get_ns());
 	ghost_sw_set_flag(next->ghost.status_word,
 			  GHOST_SW_TASK_RUNNABLE | GHOST_SW_TASK_ONCPU);
 

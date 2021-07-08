@@ -14,88 +14,98 @@
 #include "sched.h"
 #include <linux/filter.h>
 
-static DEFINE_MUTEX(sched_tick);
-static struct bpf_prog *tick_prog;
+#ifdef CONFIG_SCHED_CLASS_GHOST
 
-bool bpf_sched_ghost_skip_tick(void)
+bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
-	struct bpf_scheduler_kern ctx = {};
+	struct bpf_ghost_sched_kern ctx = {};
 	struct bpf_prog *prog;
-	int ret;
 
-	rcu_read_lock();
+	lockdep_assert_held(&rq->lock);
 
-	prog = rcu_dereference(tick_prog);
-	if (!prog) {
-		rcu_read_unlock();
+	prog = rcu_dereference(e->bpf_tick);
+	if (!prog)
 		return false;
-	}
 
 	/* prog returns 1 if we want a tick on this cpu. */
-	ret = BPF_PROG_RUN(prog, &ctx);
-
-	rcu_read_unlock();
-
-	return ret != 1;
+	return BPF_PROG_RUN(prog, &ctx) != 1;
 }
 
-static int sched_tick_attach(struct bpf_prog *prog)
+static int ghost_sched_tick_attach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
 {
-	mutex_lock(&sched_tick);
-	if (tick_prog) {
-		mutex_unlock(&sched_tick);
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_tick) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
 		return -EBUSY;
 	}
-	rcu_assign_pointer(tick_prog, prog);
-	mutex_unlock(&sched_tick);
+	rcu_assign_pointer(e->bpf_tick, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
 	return 0;
 }
 
-static void sched_tick_detach(struct bpf_prog *prog)
+static void ghost_sched_tick_detach(struct ghost_enclave *e,
+				    struct bpf_prog *prog)
 {
-	mutex_lock(&sched_tick);
-	rcu_replace_pointer(tick_prog, NULL, lockdep_is_held(&sched_tick));
-	mutex_unlock(&sched_tick);
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_tick, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
 }
 
-struct bpf_sched_link {
+struct bpf_ghost_sched_link {
 	struct bpf_link	link;
+	struct ghost_enclave *e;
 	enum bpf_attach_type ea_type;
 };
 
-static void bpf_sched_link_release(struct bpf_link *link)
+static void bpf_ghost_sched_link_release(struct bpf_link *link)
 {
-	struct bpf_sched_link *sc_link =
-		container_of(link, struct bpf_sched_link, link);
+	struct bpf_ghost_sched_link *sc_link =
+		container_of(link, struct bpf_ghost_sched_link, link);
+	struct ghost_enclave *e = sc_link->e;
+
+	if (WARN_ONCE(!e, "Missing enclave for bpf link ea_type %d!",
+		      sc_link->ea_type))
+		return;
 
 	switch (sc_link->ea_type) {
-	case BPF_SCHEDULER_TICK:
-		sched_tick_detach(link->prog);
+	case BPF_GHOST_SCHED_SKIP_TICK:
+		ghost_sched_tick_detach(e, link->prog);
 		break;
 	default:
+		WARN_ONCE(1, "Unexpected release for ea_type %d",
+			  sc_link->ea_type);
 		break;
 	};
-
+	kref_put(&e->kref, enclave_release);
+	sc_link->e = NULL;
 }
 
-static void bpf_sched_link_dealloc(struct bpf_link *link)
+static void bpf_ghost_sched_link_dealloc(struct bpf_link *link)
 {
-	struct bpf_sched_link *sc_link =
-		container_of(link, struct bpf_sched_link, link);
+	struct bpf_ghost_sched_link *sc_link =
+		container_of(link, struct bpf_ghost_sched_link, link);
 
 	kfree(sc_link);
 }
 
-static const struct bpf_link_ops bpf_sched_link_ops = {
-	.release = bpf_sched_link_release,
-	.dealloc = bpf_sched_link_dealloc,
+static const struct bpf_link_ops bpf_ghost_sched_link_ops = {
+	.release = bpf_ghost_sched_link_release,
+	.dealloc = bpf_ghost_sched_link_dealloc,
 };
 
-int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog)
 {
 	struct bpf_link_primer link_primer;
-	struct bpf_sched_link *sc_link;
+	struct bpf_ghost_sched_link *sc_link;
 	enum bpf_attach_type ea_type;
+	struct ghost_enclave *e;
+	struct fd f_enc = {0};
 	int err;
 
 	if (attr->link_create.flags)
@@ -105,7 +115,7 @@ int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	ea_type = prog->expected_attach_type;
 
 	switch (ea_type) {
-	case BPF_SCHEDULER_TICK:
+	case BPF_GHOST_SCHED_SKIP_TICK:
 		break;
 	default:
 		return -EINVAL;
@@ -115,7 +125,7 @@ int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	if (!sc_link)
 		return -ENOMEM;
 	bpf_link_init(&sc_link->link, BPF_LINK_TYPE_UNSPEC,
-		      &bpf_sched_link_ops, prog);
+		      &bpf_ghost_sched_link_ops, prog);
 	sc_link->ea_type = ea_type;
 
 	err = bpf_link_prime(&sc_link->link, &link_primer);
@@ -124,9 +134,26 @@ int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		return -EINVAL;
 	}
 
+	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
+	if (!e) {
+		ghost_fdput_enclave(e, &f_enc);
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
+		bpf_link_cleanup(&link_primer);
+		return -EBADF;
+	}
+	/*
+	 * On success, sc_link will hold a kref on the enclave, which will get
+	 * put when the link's FD is closed (and thus bpf_link_put ->
+	 * bpf_link_free -> our release).  This is similar to how ghostfs files
+	 * hold a kref on the enclave.  Release is not called on failure.
+	 */
+	kref_get(&e->kref);
+	sc_link->e = e;
+	ghost_fdput_enclave(e, &f_enc);
+
 	switch (ea_type) {
-	case BPF_SCHEDULER_TICK:
-		err = sched_tick_attach(prog);
+	case BPF_GHOST_SCHED_SKIP_TICK:
+		err = ghost_sched_tick_attach(e, prog);
 		break;
 	default:
 		pr_warn("bad sched bpf ea_type %d, should be unreachable",
@@ -135,7 +162,9 @@ int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		break;
 	};
 	if (err) {
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
 		bpf_link_cleanup(&link_primer);
+		kref_put(&e->kref, enclave_release);
 		return err;
 	}
 
@@ -143,32 +172,33 @@ int scheduler_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 }
 
 /* netns does this to have a packed array of progs[type].  might do this for the
- * task type only, or maybe for all sched types.
+ * task type only, or maybe for all ghost types.
  */
-enum sched_bpf_attach_type {
-	SCHED_BPF_INVALID = -1,
-	SCHED_BPF_TICK = 0,
+enum ghost_sched_bpf_attach_type {
+	GHOST_SCHED_BPF_INVALID = -1,
+	GHOST_SCHED_BPF_TICK = 0,
 	MAX_SCHED_BPF_ATTACH_TYPE
 };
 
-static inline enum sched_bpf_attach_type
-to_sched_bpf_attach_type(enum bpf_attach_type attach_type)
+static inline enum ghost_sched_bpf_attach_type
+to_ghost_sched_bpf_attach_type(enum bpf_attach_type attach_type)
 {
 	switch (attach_type) {
-	case BPF_SCHEDULER_TICK:
-		return SCHED_BPF_TICK;
+	case BPF_GHOST_SCHED_SKIP_TICK:
+		return GHOST_SCHED_BPF_TICK;
 	default:
-		return SCHED_BPF_INVALID;
+		return GHOST_SCHED_BPF_INVALID;
 	}
 }
 
-int scheduler_bpf_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog)
 {
-	enum sched_bpf_attach_type type;
+	enum ghost_sched_bpf_attach_type type;
 
 	if (attr->target_fd || attr->attach_flags || attr->replace_bpf_fd)
 		return -EINVAL;
-	type = to_sched_bpf_attach_type(attr->attach_type);
+	type = to_ghost_sched_bpf_attach_type(attr->attach_type);
 	if (type < 0)
 		return -EINVAL;
 
@@ -177,16 +207,16 @@ int scheduler_bpf_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	return -1;
 }
 
-int scheduler_bpf_prog_detach(const union bpf_attr *attr,
-			      enum bpf_prog_type ptype)
+int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
+				enum bpf_prog_type ptype)
 {
 	struct bpf_prog *prog;
-	enum sched_bpf_attach_type type;
+	enum ghost_sched_bpf_attach_type type;
 
 	if (attr->attach_flags)
 		return -EINVAL;
 
-	type = to_sched_bpf_attach_type(attr->attach_type);
+	type = to_ghost_sched_bpf_attach_type(attr->attach_type);
 	if (type < 0)
 		return -EINVAL;
 
@@ -207,7 +237,7 @@ int scheduler_bpf_prog_detach(const union bpf_attr *attr,
 }
 
 static const struct bpf_func_proto *
-scheduler_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	switch (func_id) {
 	default:
@@ -215,13 +245,14 @@ scheduler_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
-static bool scheduler_is_valid_access(int off, int size,
-				      enum bpf_access_type type,
-				      const struct bpf_prog *prog,
-				      struct bpf_insn_access_aux *info)
+static bool ghost_sched_is_valid_access(int off, int size,
+					enum bpf_access_type type,
+					const struct bpf_prog *prog,
+					struct bpf_insn_access_aux *info)
 {
 	/* The verifier guarantees that size > 0. */
-	if (off < 0 || off + size > sizeof(struct bpf_scheduler) || off % size)
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_sched)
+	    || off % size)
 		return false;
 
 	switch (off) {
@@ -231,14 +262,15 @@ static bool scheduler_is_valid_access(int off, int size,
 }
 
 #define SCHEDULER_ACCESS_FIELD(T, F)					\
-	T(BPF_FIELD_SIZEOF(struct bpf_scheduler_kern, F),		\
+	T(BPF_FIELD_SIZEOF(struct bpf_ghost_sched_kern, F),		\
 	  si->dst_reg, si->src_reg,					\
-	  offsetof(struct bpf_scheduler_kern, F))
+	  offsetof(struct bpf_ghost_sched_kern, F))
 
-static u32 scheduler_convert_ctx_access(enum bpf_access_type type,
-					const struct bpf_insn *si,
-					struct bpf_insn *insn_buf,
-					struct bpf_prog *prog, u32 *target_size)
+static u32 ghost_sched_convert_ctx_access(enum bpf_access_type type,
+					  const struct bpf_insn *si,
+					  struct bpf_insn *insn_buf,
+					  struct bpf_prog *prog,
+					  u32 *target_size)
 {
 	struct bpf_insn *insn = insn_buf;
 
@@ -253,11 +285,35 @@ static u32 scheduler_convert_ctx_access(enum bpf_access_type type,
 	return insn - insn_buf;
 }
 
-const struct bpf_verifier_ops scheduler_verifier_ops = {
-	.get_func_proto		= scheduler_func_proto,
-	.is_valid_access	= scheduler_is_valid_access,
-	.convert_ctx_access	= scheduler_convert_ctx_access,
+const struct bpf_verifier_ops ghost_sched_verifier_ops = {
+	.get_func_proto		= ghost_sched_func_proto,
+	.is_valid_access	= ghost_sched_is_valid_access,
+	.convert_ctx_access	= ghost_sched_convert_ctx_access,
 };
 
-const struct bpf_prog_ops scheduler_prog_ops = {
+const struct bpf_prog_ops ghost_sched_prog_ops = {
 };
+#else /* !CONFIG_SCHED_CLASS_GHOST */
+
+const struct bpf_verifier_ops ghost_sched_verifier_ops = {};
+const struct bpf_prog_ops ghost_sched_prog_ops = {};
+
+int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog)
+{
+	return -EINVAL;
+}
+
+int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
+				struct bpf_prog *prog)
+{
+	return -EINVAL;
+}
+
+int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
+				enum bpf_prog_type ptype)
+{
+	return -EINVAL;
+}
+
+#endif /* !CONFIG_SCHED_CLASS_GHOST */

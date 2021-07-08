@@ -112,6 +112,7 @@ struct ghost_rq {
 	bool agent_should_wake;
 	bool must_resched;		/* rq->curr must reschedule in PNT */
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
+	bool skip_latched_preemption;
 	int ghost_nr_running;
 	int run_flags;			/* flags passed to 'ghost_run()' */
 
@@ -180,6 +181,7 @@ struct ghost_enclave {
 	struct ghost_queue *def_q;	/* default queue */
 
 	struct list_head task_list;	/* all non-agent tasks in the enclave */
+	unsigned long nr_tasks;
 	struct work_struct task_reaper;
 	struct enclave_work ew;		/* to defer work while holding locks */
 	struct work_struct enclave_actual_release;/* work for enclave_release */
@@ -193,9 +195,13 @@ struct ghost_enclave {
 	struct work_struct enclave_destroyer;
 
 	unsigned long id;
-	bool is_dying;
+	int is_dying;
 	bool agent_online;		/* userspace says agent can schedule. */
 	struct kernfs_node *enclave_dir;
+
+#ifdef CONFIG_BPF
+	struct bpf_prog *bpf_tick;
+#endif
 };
 
 /* In kernel/sched/ghostfs.c */
@@ -237,10 +243,16 @@ extern void ghost_sched_cleanup_fork(struct task_struct *p);
 extern void ghost_latched_task_preempted(struct rq *rq);
 extern void ghost_task_preempted(struct rq *rq, struct task_struct *prev);
 extern unsigned long ghost_cfs_added_load(struct rq *rq);
-extern void ghost_wake_agent_on(int cpu);
 extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
-extern bool bpf_sched_ghost_skip_tick(void);
+#ifdef CONFIG_BPF
+extern bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq);
+#else
+static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
+{
+	return false;
+}
+#endif
 extern void ghost_wait_for_rendezvous(struct rq *rq);
 extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);
@@ -263,6 +275,17 @@ static inline void ghost_sw_set_flag(struct ghost_status_word *sw,
 static inline void ghost_sw_clear_flag(struct ghost_status_word *sw,
 				       uint32_t flag) {
 	smp_store_release(&sw->flags, sw->flags & ~flag);
+}
+
+static inline void ghost_sw_set_time(struct ghost_status_word *sw,
+				     s64 time) {
+	/*
+	 * Do a relaxed store since userspace syncs with the release store to
+         * `sw->flags` for setting the oncpu bit in `ghost_sw_set_flag`. We set
+         * the time in this function before setting the oncpu bit, so we use
+         * that release store as a barrier.
+	 */
+	WRITE_ONCE(sw->switch_time, time);
 }
 
 static inline int ghost_schedattr_to_enclave_fd(const struct sched_attr *attr)

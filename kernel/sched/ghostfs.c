@@ -583,6 +583,7 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	struct ghost_enclave *e = seq_to_e(sf);
 	unsigned long fl;
 	bool is_active;
+	unsigned long nr_tasks;
 
 	/*
 	 * Userspace uses this to find any active enclave, since they don't have
@@ -595,9 +596,11 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	 * is for the *enclave*, not the *agent*.
 	 */
 	is_active = e->agent_online;
+	nr_tasks = e->nr_tasks;
 	spin_unlock_irqrestore(&e->lock, fl);
 
 	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
+	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
 	return 0;
 }
 
