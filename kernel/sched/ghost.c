@@ -549,6 +549,26 @@ static void switched_to_ghost(struct rq *rq, struct task_struct *p)
 
 static void switched_from_ghost(struct rq *rq, struct task_struct *p)
 {
+	/*
+	 * A running task can be switched into ghost while it is executing
+	 * sched_setscheduler(cfs). Make sure TASK_NEW is produced before
+	 * TASK_DEPARTED in this case.
+	 *
+	 * Note that unlike TASK_AFFINITY_CHANGED (which we just forget in
+	 * a similar situation) we must produce TASK_DEPARTED so the task's
+	 * status_word is freed by the agent.
+	 *
+	 * Also note that we must call ghost_task_new() here before calling
+	 * release_from_ghost() since the former sets things up for the
+	 * latter to tear down (e.g. adding task to enclave->task_list).
+	 */
+	if (unlikely(p->ghost.new_task)) {
+		WARN_ON_ONCE(!task_current(rq, p));
+		p->ghost.new_task = false;
+		ghost_task_new(rq, p);
+		ghost_wake_agent_of(p);
+	}
+
 	release_from_ghost(rq, p);
 
 	/*
@@ -1391,8 +1411,8 @@ static void task_woken_ghost(struct rq *rq, struct task_struct *p)
 	ghost_sw_set_flag(sw, GHOST_SW_TASK_RUNNABLE);
 
 	if (unlikely(p->ghost.new_task)) {
-		ghost_task_new(rq, p);
 		p->ghost.new_task = false;
+		ghost_task_new(rq, p);
 		goto done;
 	}
 	task_deliver_msg_wakeup(rq, p);
@@ -3760,6 +3780,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 	lockdep_assert_held(&p->pi_lock);
 
 	WARN_ON_ONCE(is_cached_task(rq, p));
+	WARN_ON_ONCE(p->ghost.new_task);
 
 	spin_lock_irqsave(&e->lock, flags);
 
