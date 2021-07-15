@@ -3688,6 +3688,15 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 {
 	struct ghost_msg_payload_task_affinity_changed payload;
 
+	/*
+	 * A running task can be switched into ghost while it is executing
+	 * sched_setaffinity. In this case the TASK_NEW msg is held pending
+	 * until the task schedules and producing the TASK_AFFINITY_CHANGED
+	 * msg is useless at best since the agent has no idea about this task.
+	 */
+	if (unlikely(p->ghost.new_task))
+		return;
+
 	if (__task_deliver_common(rq, p))
 		return;
 
