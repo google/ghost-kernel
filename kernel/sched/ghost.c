@@ -1387,6 +1387,13 @@ static void set_cpus_allowed_ghost(struct task_struct *p,
 		locked = true;
 	}
 
+	/*
+	 * N.B. sched_setaffinity() can race with exit() such that the task
+	 * is already dead and contents of 'p->ghost' are no longer valid.
+	 *
+	 * Task msg delivery handles this properly but be careful when
+	 * accessing 'p->ghost' directly in this function.
+	 */
 	task_deliver_msg_affinity_changed(rq, p);
 
 	if (locked)
@@ -3578,6 +3585,16 @@ static bool ghost_in_switchto(struct rq *rq)
 static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 {
 	lockdep_assert_held(&rq->lock);
+
+	/*
+	 * Some operations (e.g. sched_setaffinity()) can race with task death
+	 * in which case the 'status_word' is off limits and will cause an oops
+	 * in task_barrier_inc() below.
+	 */
+	if (unlikely(!p->ghost.status_word)) {
+		WARN_ON_ONCE(p->state != TASK_DEAD);
+		return -1;
+	}
 
 	/*
 	 * Ignore the agent's task_state changes.
