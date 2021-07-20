@@ -4300,15 +4300,29 @@ done:
 	}
 
 	/*
-	 * CPU in a ghost switchto chain or switching to a non-ghost task
-	 * while a task is latched.
+	 * CPU is switching to a non-ghost task while a task is latched.
 	 *
 	 * Treat this like latched_task preemption because we don't know when
 	 * the CPU will be available again so no point in keeping it latched.
 	 */
-	if (rq->ghost.latched_task &&
-	    (!task_has_ghost_policy(next) || rq->ghost.switchto_count > 0)) {
+	if (rq->ghost.latched_task) {
+		/*
+		 * If 'next' was returned from pick_next_task_ghost() then
+		 * 'latched_task' must have been cleared. Conversely if
+		 * there is 'latched_task' then 'next' could not have
+		 * been returned from pick_next_task_ghost().
+		 */
+		WARN_ON_ONCE(task_has_ghost_policy(next) &&
+			     !is_agent(rq, next));
 		ghost_latched_task_preempted(rq);
+
+		/*
+		 * XXX the WARN above is susceptible to a false-negative
+		 * when pick_next_task_ghost returns the idle task. This
+		 * is not the common case but it highlights that what we
+		 * really need to check is the sched_class that produced
+		 * 'next'.
+		 */
 	}
 
 	/*
