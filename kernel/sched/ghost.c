@@ -3652,6 +3652,20 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	if (__task_deliver_common(rq, p))
 		return;
 
+	/*
+	 * It doesn't make sense to produce a TASK_PREEMPT while a switchto
+	 * chain is active.
+	 *
+	 * Stated differently TASK_PREEMPT is only expected when:
+	 * 1. the task is not part of an active switchto chain:
+	 *    - a task that got oncpu via __schedule().
+	 *    - a latched_task.
+	 * 2. the task was in an active switchto chain that is now broken:
+	 *    - preempted by a higher priority sched_class.
+	 *    - preempted by the agent doing a transaction commit.
+	 */
+	WARN_ON_ONCE(from_switchto && rq->ghost.switchto_count > 0);
+
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
