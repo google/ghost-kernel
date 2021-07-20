@@ -70,6 +70,8 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p);
 static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
+static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
+				     bool latched_preempt);
 static bool cpu_deliver_msg_tick(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
 static int agent_target_cpu(struct rq *rq);
@@ -1072,6 +1074,15 @@ void ghost_latched_task_preempted(struct rq *rq)
 	WARN_ON_ONCE(!rq->ghost.agent);
 
 	if (task_has_ghost_policy(latched)) {
+		/*
+		 * Normally, TASK_LATCHED is not sent until we context switch to
+		 * the task.  The agent is expecting this message before
+		 * TASK_PREEMPT.
+		 */
+		if (rq->ghost.run_flags & SEND_TASK_LATCHED) {
+			task_deliver_msg_latched(rq, latched, true);
+			rq->ghost.run_flags &= ~SEND_TASK_LATCHED;
+		}
 		_ghost_task_preempted(rq, latched, true);
 		ghost_wake_agent_of(latched);
 	} else {
@@ -3712,11 +3723,12 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 
 static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_blocked payload = {.gtid = gtid(p)};
+	struct ghost_msg_payload_task_blocked payload;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
+	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 	payload.from_switchto = ghost_in_switchto(rq);
@@ -3774,6 +3786,22 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 
 	produce_for_task(p, MSG_TASK_AFFINITY_CHANGED, &payload,
 			 sizeof(payload));
+}
+
+static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
+				     bool latched_preempt)
+{
+	struct ghost_msg_payload_task_latched payload;
+
+	if (__task_deliver_common(rq, p))
+		return;
+
+	payload.gtid = gtid(p);
+	payload.commit_time = ktime_get_ns();
+	payload.cpu = cpu_of(rq);
+	payload.latched_preempt = latched_preempt;
+
+	produce_for_task(p, MSG_TASK_LATCHED, &payload, sizeof(payload));
 }
 
 static inline bool deferrable_wakeup(struct task_struct *p)
@@ -3857,14 +3885,6 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 	p->ghost.status_word = NULL;
 
 	if (unlikely(is_agent(rq, p))) {
-		/* We don't allow agents to setsched away from ghost */
-		WARN_ON_ONCE(p->state != TASK_DEAD);
-		rq->ghost.agent = NULL;
-		rq->ghost.run_flags = 0;
-		WRITE_ONCE(rq->ghost.agent_barrier, 0);
-		p->ghost.agent = false;
-		VM_BUG_ON(rq->ghost.blocked_in_run);
-
 		/*
 		 * Unlatched any tasks that had been committed.  Latched tasks
 		 * will be selected in PNT after a new agent attaches, which
@@ -3883,6 +3903,19 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		 */
 		if (rq->ghost.latched_task)
 			ghost_latched_task_preempted(rq);
+		/* We don't allow agents to setsched away from ghost */
+		WARN_ON_ONCE(p->state != TASK_DEAD);
+		rq->ghost.agent = NULL;
+		/*
+		 * Clear run_flags after dealing with latched_task: the
+		 * run_flags pertain to the latched_task, especially for
+		 * SEND_TASK_LATCHED.
+		 */
+		rq->ghost.run_flags = 0;
+		WRITE_ONCE(rq->ghost.agent_barrier, 0);
+		p->ghost.agent = false;
+		VM_BUG_ON(rq->ghost.blocked_in_run);
+
 		/*
 		 * Clean up any pending transactions.  We need to do this here,
 		 * in addition to in setsched, since the global agent may be
@@ -4135,6 +4168,23 @@ void ghost_task_preempted(struct rq *rq, struct task_struct *p)
 	VM_BUG_ON(task_rq(p) != rq);
 
 	_ghost_task_preempted(rq, p, false);
+}
+
+void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p)
+{
+	lockdep_assert_held(&rq->lock);
+	VM_BUG_ON(task_rq(p) != rq);
+
+	/*
+	 * We must defer sending TASK_LATCHED until any prev ghost tasks got off
+	 * cpu.  Otherwise the agent will have a hard time reconciling the
+	 * current cpu state.
+	 */
+	if (rq->ghost.run_flags & SEND_TASK_LATCHED) {
+		task_deliver_msg_latched(rq, p, false);
+		/* Do not send the message more than once per commit. */
+		rq->ghost.run_flags &= ~SEND_TASK_LATCHED;
+	}
 }
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p)
@@ -4429,6 +4479,7 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 				    NEED_L1D_FLUSH	|
 				    ALLOW_TASK_ONCPU	|
 				    ELIDE_PREEMPT	|
+				    SEND_TASK_LATCHED	|
 				    0;
 
 	WARN_ON_ONCE(preemptible());
@@ -4666,6 +4717,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 				    NEED_CPU_NOT_IDLE	|
 				    ALLOW_TASK_ONCPU	|
 				    ELIDE_PREEMPT	|
+				    SEND_TASK_LATCHED	|
 				    0;
 
 	VM_BUG_ON(preemptible());

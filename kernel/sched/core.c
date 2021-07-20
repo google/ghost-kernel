@@ -4325,6 +4325,9 @@ done:
 		 */
 	}
 
+	if (task_has_ghost_policy(next) && !is_agent(rq, next))
+		ghost_task_got_oncpu(rq, next);
+
 	/*
 	 * The last task in the chain scheduled (blocked/yielded/preempted).
 	 */

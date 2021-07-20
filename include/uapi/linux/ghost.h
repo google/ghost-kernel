@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	36
+#define GHOST_VERSION	37
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -174,6 +174,7 @@ enum {
 	MSG_TASK_DEPARTED,
 	MSG_TASK_SWITCHTO,
 	MSG_TASK_AFFINITY_CHANGED,
+	MSG_TASK_LATCHED,
 
 	/* cpu messages */
 	MSG_CPU_TICK		= _MSG_CPU_FIRST,
@@ -247,6 +248,13 @@ struct ghost_msg_payload_task_switchto {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
 	int cpu;
+};
+
+struct ghost_msg_payload_task_latched {
+	uint64_t gtid;
+	uint64_t commit_time;
+	int cpu;
+	char latched_preempt;
 };
 
 struct ghost_msg_payload_cpu_not_idle {
@@ -358,6 +366,7 @@ enum ghost_base_ops {
 #define ELIDE_PREEMPT     (1 << 9)  /* Do not send TASK_PREEMPT if we preempt
 				     * a previous ghost task on this cpu
 				     */
+#define SEND_TASK_LATCHED (1 << 10) /* Send TASK_LATCHED at commit time */
 
 /* txn->commit_flags */
 enum txn_commit_at {
