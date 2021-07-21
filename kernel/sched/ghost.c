@@ -3606,6 +3606,14 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 		return -1;
 
 	/*
+	 * There should not be any deferred TASK_NEW at this point so WARN
+	 * and proceed. The agent will also flag that it received a msg from
+	 * an unknown task which is useful in case kernel log is unavailable.
+	 * (for e.g. see b/193059731).
+	 */
+	WARN_ON_ONCE(p->ghost.new_task);
+
+	/*
 	 * Increment the barrier even if we are not going to send a message due
 	 * to a missing queue, since the barrier protects some parts of the SW's
 	 * state.
