@@ -587,7 +587,18 @@ static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	const bool sleeping = flags & DEQUEUE_SLEEP;
 	struct ghost_status_word *sw = p->ghost.status_word;
 
-	update_curr_ghost(rq);
+	/*
+	 * A task is accumulating cputime only when it is oncpu. Thus it is
+	 * useless to call update_curr_ghost for a task that is 'on_rq' but
+	 * is not running (in this case we'll just update the cputime of
+	 * whatever task happens to be oncpu).
+	 *
+	 * Ordinarily we wouldn't care but we routinely dequeue_task_ghost()
+	 * when migrating a task via ghost_move_task() during txn commit so
+	 * we call update_curr_ghost() only if 'p' is actually running.
+	 */
+	if (task_current(rq, p))
+		update_curr_ghost(rq);
 
 	BUG_ON(rq->ghost.ghost_nr_running <= 0);
 	rq->ghost.ghost_nr_running--;
