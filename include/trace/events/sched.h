@@ -687,21 +687,25 @@ TRACE_EVENT(sched_wake_idle_without_ipi,
 TRACE_EVENT(sched_ghost_latched,
 
 	TP_PROTO(struct task_struct *old,
-		 struct task_struct *new),
+		 struct task_struct *new,
+		 int run_flags),
 
-	TP_ARGS(old, new),
+	TP_ARGS(old, new, run_flags),
 
 	TP_STRUCT__entry(
 		__field(pid_t, old_pid)
 		__field(pid_t, new_pid)
+		__field(int, run_flags)
 	),
 
 	TP_fast_assign(
 		__entry->old_pid	= old ? old->pid : 0;
 		__entry->new_pid	= new ? new->pid : 0;
+		__entry->run_flags	= run_flags;
 	),
 
-	TP_printk("old_pid=%d, new_pid=%d", __entry->old_pid, __entry->new_pid)
+	TP_printk("old_pid=%d, new_pid=%d, run_flags=0x%x", __entry->old_pid,
+		  __entry->new_pid, __entry->run_flags)
 );
 
 /*

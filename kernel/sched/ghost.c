@@ -3975,7 +3975,7 @@ static void task_dead_ghost(struct task_struct *p)
 static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
 				int run_flags)
 {
-	trace_sched_ghost_latched(rq->ghost.latched_task, p);
+	trace_sched_ghost_latched(rq->ghost.latched_task, p, run_flags);
 
 	lockdep_assert_held(&rq->lock);
 
