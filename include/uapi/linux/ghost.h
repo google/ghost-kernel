@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	42
+#define GHOST_VERSION	43
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -379,6 +379,13 @@ enum ghost_base_ops {
 #define ALLOW_TASK_ONCPU	(1 << 2) /* If task is running on a remote cpu
 					  * then let continue running there.
 					  */
+#define ELIDE_AGENT_BARRIER_INC	(1 << 3) /* Do not increment the agent
+					  * barrier (ie. on successfully
+					  * latching the task).
+					  */
+#define INC_AGENT_BARRIER_ON_FAILURE	(1 << 4) /* Increment agent_barrier
+						  * on transaction failure.
+						  */
 
 /* Union of all COMMIT_AT_XYZ flags */
 #define COMMIT_AT_FLAGS		(COMMIT_AT_SCHEDULE | COMMIT_AT_TXN_COMMIT)

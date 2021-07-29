@@ -4364,6 +4364,11 @@ static inline bool commit_flags_valid(int commit_flags, int valid_commit_flags)
 	if (hweight8(commit_flags & COMMIT_AT_FLAGS) > 1)
 		return false;
 
+	/* Cannot specify both elide barrier inc and inc on failure. */
+	if ((commit_flags & ELIDE_AGENT_BARRIER_INC) &&
+	    (commit_flags & INC_AGENT_BARRIER_ON_FAILURE))
+		return false;
+
 	return true;
 }
 
@@ -4741,6 +4746,11 @@ static inline bool blocking_run(struct rq *rq, bool sync, gtid_t gtid)
 	return _local_commit(rq, sync) && gtid != GHOST_AGENT_GTID;
 }
 
+static inline bool ghost_txn_succeeded(int state)
+{
+	return state == GHOST_TXN_COMPLETE;
+}
+
 /*
  * Caller is responsible for claiming txn (before calling this function)
  * and finalizing it (after this function returns).
@@ -4753,7 +4763,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	struct rq_flags rf;
 	struct task_struct *next;
 	bool local_run, resched = false;
-	int commit_flags, run_flags, state = GHOST_TXN_COMPLETE;
+	int commit_flags = 0, run_flags, state = GHOST_TXN_COMPLETE;
 	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, run_cpu));
 
 	const int supported_run_flags = RTLA_ON_PREEMPT	|
@@ -4766,9 +4776,11 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 					SEND_TASK_LATCHED |
 					0;
 
-	const int supported_commit_flags = COMMIT_AT_SCHEDULE	|
-					   COMMIT_AT_TXN_COMMIT	|
-					   ALLOW_TASK_ONCPU	|
+	const int supported_commit_flags = COMMIT_AT_SCHEDULE		|
+					   COMMIT_AT_TXN_COMMIT		|
+					   ALLOW_TASK_ONCPU		|
+					   ELIDE_AGENT_BARRIER_INC	|
+					   INC_AGENT_BARRIER_ON_FAILURE	|
 					   0;
 
 	VM_BUG_ON(preemptible());
@@ -4987,7 +4999,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		 */
 
 		/* "serialize" with remote-agent doing a local run */
-		agent_barrier_inc(rq);
+		if (!(commit_flags & ELIDE_AGENT_BARRIER_INC))
+			agent_barrier_inc(rq);
 
 		/*
 		 * Update latched task unless this is a ping in which case
@@ -5043,8 +5056,24 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 out:
 	if (rq) {
 		lockdep_assert_held(&rq->lock);
-		rq_unlock_irqrestore(rq, &rf);
+		if (WARN_ON_ONCE(rq != cpu_rq(run_cpu))) {
+			rq_unlock_irqrestore(rq, &rf);
+			rq = NULL;
+		}
 	}
+
+	if ((commit_flags & INC_AGENT_BARRIER_ON_FAILURE) &&
+	    !ghost_txn_succeeded(state)) {
+		if (!rq) {
+			rq = cpu_rq(run_cpu);
+			rq_lock_irqsave(rq, &rf);
+		}
+		agent_barrier_inc(rq);
+	}
+
+	if (rq)
+		rq_unlock_irqrestore(rq, &rf);
+
 	*commit_state = state;
 	return resched;
 }
@@ -5102,11 +5131,6 @@ static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err)
 
 	/* We're often called from within the scheduler */
 	preempt_enable_no_resched();
-}
-
-static inline bool ghost_txn_succeeded(int state)
-{
-	return state == GHOST_TXN_COMPLETE;
 }
 
 static bool ghost_commit_txn(int run_cpu, bool sync, int *commit_state)
@@ -5344,11 +5368,24 @@ static int gsys_ghost_sync_group(ulong __user *user_mask_ptr,
 	 */
 	for_each_cpu_wrap(cpu, cpumask, this_cpu + 1) {
 		bool resched, need_rendezvous;
+		struct rq *rq = cpu_rq(cpu);
+		struct rq_flags rf;
+		struct ghost_txn *txn;
+		int commit_flags;
+
 		/*
 		 * No point in committing this txn if we know a prior txn
 		 * failed to commit.
 		 */
 		if (failed) {
+			txn = rcu_dereference(per_cpu(ghost_txn, cpu));
+			commit_flags = READ_ONCE(txn->commit_flags);
+
+			if (commit_flags & INC_AGENT_BARRIER_ON_FAILURE) {
+				rq_lock_irqsave(rq, &rf);
+				agent_barrier_inc(rq);
+				rq_unlock_irqrestore(rq, &rf);
+			}
 			ghost_poison_txn(cpu);
 			__cpumask_clear_cpu(cpu, cpumask);
 			continue;
