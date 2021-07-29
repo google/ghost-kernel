@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	37
+#define GHOST_VERSION	38
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -195,6 +195,7 @@ struct ghost_msg_payload_task_preempt {
 	uint64_t runtime;	/* cumulative runtime in ns */
 	int cpu;
 	char from_switchto;
+	char was_latched;
 };
 
 struct ghost_msg_payload_task_yield {

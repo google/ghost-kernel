@@ -3692,7 +3692,7 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 }
 
 static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
-				     bool from_switchto)
+				     bool from_switchto, bool was_latched)
 {
 	struct ghost_msg_payload_task_preempt payload;
 
@@ -3717,6 +3717,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
 	payload.from_switchto = from_switchto;
+	payload.was_latched = was_latched;
 
 	produce_for_task(p, MSG_TASK_PREEMPT, &payload, sizeof(payload));
 }
@@ -4148,7 +4149,7 @@ static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
 	from_switchto = was_latched ? false : ghost_in_switchto(rq);
 
 	/* Produce MSG_TASK_PREEMPT into 'p->ghost.dst_q' */
-	task_deliver_msg_preempt(rq, p, from_switchto);
+	task_deliver_msg_preempt(rq, p, from_switchto, was_latched);
 
 	/*
 	 * Wakeup agent on this CPU.
