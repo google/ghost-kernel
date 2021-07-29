@@ -3686,6 +3686,7 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	payload.from_switchto = ghost_in_switchto(rq);
 
 	produce_for_task(p, MSG_TASK_YIELD, &payload, sizeof(payload));
@@ -3716,6 +3717,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	payload.from_switchto = from_switchto;
 	payload.was_latched = was_latched;
 
@@ -3732,6 +3734,7 @@ static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	payload.from_switchto = ghost_in_switchto(rq);
 
 	produce_for_task(p, MSG_TASK_BLOCKED, &payload, sizeof(payload));
@@ -3757,6 +3760,7 @@ static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 
 	payload.gtid = gtid(p);
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	if (task_current(rq, p) && ghost_in_switchto(rq))
 		payload.from_switchto = true;
 	else
@@ -3800,6 +3804,7 @@ static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
 	payload.gtid = gtid(p);
 	payload.commit_time = ktime_get_ns();
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	payload.latched_preempt = latched_preempt;
 
 	produce_for_task(p, MSG_TASK_LATCHED, &payload, sizeof(payload));
@@ -3844,6 +3849,7 @@ static void task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
+	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
 
 	produce_for_task(p, MSG_TASK_SWITCHTO, &payload, sizeof(payload));
 }

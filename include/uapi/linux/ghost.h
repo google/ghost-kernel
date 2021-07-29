@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	38
+#define GHOST_VERSION	39
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -193,6 +193,7 @@ struct ghost_msg_payload_task_new {
 struct ghost_msg_payload_task_preempt {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
+	uint64_t cpu_seqnum;	/* cpu sequence number */
 	int cpu;
 	char from_switchto;
 	char was_latched;
@@ -201,6 +202,7 @@ struct ghost_msg_payload_task_preempt {
 struct ghost_msg_payload_task_yield {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
+	uint64_t cpu_seqnum;
 	int cpu;
 	char from_switchto;
 };
@@ -208,6 +210,7 @@ struct ghost_msg_payload_task_yield {
 struct ghost_msg_payload_task_blocked {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
+	uint64_t cpu_seqnum;
 	int cpu;
 	char from_switchto;
 };
@@ -218,6 +221,7 @@ struct ghost_msg_payload_task_dead {
 
 struct ghost_msg_payload_task_departed {
 	uint64_t gtid;
+	uint64_t cpu_seqnum;
 	int cpu;
 	char from_switchto;
 };
@@ -248,12 +252,14 @@ struct ghost_msg_payload_task_wakeup {
 struct ghost_msg_payload_task_switchto {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
+	uint64_t cpu_seqnum;
 	int cpu;
 };
 
 struct ghost_msg_payload_task_latched {
 	uint64_t gtid;
 	uint64_t commit_time;
+	uint64_t cpu_seqnum;
 	int cpu;
 	char latched_preempt;
 };

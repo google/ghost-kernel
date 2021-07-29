@@ -117,6 +117,7 @@ struct ghost_rq {
 	bool in_pnt_bpf;		/* running BPF at PNT */
 	int ghost_nr_running;
 	int run_flags;			/* flags passed to 'ghost_run()' */
+	uint64_t cpu_seqnum;		/* history for msgs about this cpu */
 
 	/* For deferring work to the balance_callback */
 	struct list_head enclave_work;	/* work to do */
