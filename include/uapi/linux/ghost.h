@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	43
+#define GHOST_VERSION	44
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -372,6 +372,13 @@ enum ghost_base_ops {
 				     * a previous ghost task on this cpu
 				     */
 #define SEND_TASK_LATCHED (1 << 10) /* Send TASK_LATCHED at commit time */
+/* After the task is latched, don't immediately preempt it if the cpu local
+ * agent is picked to run; wait at least until the next sched tick hits
+ * (assuming the agent is still running). This provides a good tradeoff between
+ * avoiding spurious preemption and preventing an unbounded blackout for the
+ * latched task while the agent is runnable.
+ */
+#define DEFER_LATCHED_PREEMPTION_BY_AGENT (1 << 11)
 
 /* txn->commit_flags */
 #define COMMIT_AT_SCHEDULE	(1 << 0) /* commit when oncpu task schedules */

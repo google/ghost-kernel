@@ -796,6 +796,32 @@ static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 	if (unlikely(!agent))
 		return;
 
+	if (agent == p) {
+		/*
+		 * We're currently running a ghost agent while a task is
+		 * latched on the cpu. Normally, pick_next_ghost_agent()
+		 * would have preempted the latched task, except in the
+		 * case that DEFER_LATCHED_PREEMPTION_BY_AGENT is set. We need
+		 * to prevent the latched task from experiencing an unbounded
+		 * scheduling blackout if the agent runs for a while, so we
+		 * preempt here in the tick handler.
+		 *
+		 * We could also hit this case without preemption deferment
+		 * if a task was latched while the remote agent was running,
+		 * and the tick hits before the remote agent reschedules.
+		 * In that case, it is fine to preempt here instead of in
+		 * the pick path.
+		 *
+		 * Note that the preemption edge in the pick path is not a new
+		 * edge introduced by DEFER_LATCHED_PREEMPTION_BY_AGENT. Ie.
+		 * previously when an agent is running with a ghost task
+		 * latched, any trip through schedule() would trigger a latched
+		 * preemption via pick_next_ghost_agent().
+		 */
+		if (rq->ghost.latched_task)
+			ghost_latched_task_preempted(rq);
+	}
+
 	__update_curr_ghost(rq, false);
 
 	if (cpu_deliver_msg_tick(rq))
@@ -1170,9 +1196,17 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 		 * Treat this like latched_task preemption because we don't know
 		 * when the CPU will be available again so no point in keeping
 		 * it latched.
+		 *
+		 * If the DEFER_LATCHED_PREEMPTION_BY_AGENT run flag is set, we
+		 * will defer preemption by the agent to the next tick. This
+		 * helps to avoid spurious preemption due to the agent being
+		 * runnable, while still bounding the time a latched task could
+		 * face a scheduling blackout.
 		 */
-		if (rq->ghost.latched_task)
+		if (rq->ghost.latched_task && (preempted ||
+		    !(rq->ghost.run_flags & DEFER_LATCHED_PREEMPTION_BY_AGENT))) {
 			ghost_latched_task_preempted(rq);
+		}
 
 		/* did the preemption msg wake up the local agent? */
 		if (!next)
@@ -4774,6 +4808,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 					ELIDE_PREEMPT	|
 					NEED_CPU_NOT_IDLE |
 					SEND_TASK_LATCHED |
+					DEFER_LATCHED_PREEMPTION_BY_AGENT |
 					0;
 
 	const int supported_commit_flags = COMMIT_AT_SCHEDULE		|
