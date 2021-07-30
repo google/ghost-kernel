@@ -3157,13 +3157,6 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
-		.procname	= "ghost_switchto_disable",
-		.data		= &sysctl_ghost_switchto_disable,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
-	},
-	{
 		.procname	= "ghost_commit_at_tick",
 		.data		= &sysctl_ghost_commit_at_tick,
 		.maxlen		= sizeof(int),

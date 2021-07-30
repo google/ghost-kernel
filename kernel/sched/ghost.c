@@ -59,7 +59,6 @@ static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
 int __read_mostly sysctl_ghost_wake_on_waker_cpu;
-int sysctl_ghost_switchto_disable;
 int __read_mostly sysctl_ghost_commit_at_tick;
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p);

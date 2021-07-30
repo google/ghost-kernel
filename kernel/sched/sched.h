@@ -197,6 +197,8 @@ struct ghost_enclave {
 	ktime_t max_unscheduled;
 	struct work_struct enclave_destroyer;
 
+	bool switchto_disabled;
+
 	unsigned long id;
 	int is_dying;
 	bool agent_online;		/* userspace says agent can schedule. */

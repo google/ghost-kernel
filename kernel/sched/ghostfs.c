@@ -578,6 +578,37 @@ static struct kernfs_ops gf_ops_e_runnable_timeout = {
 	.write			= gf_runnable_timeout_write,
 };
 
+static int gf_switchto_disabled_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->switchto_disabled));
+	return 0;
+}
+
+static ssize_t gf_switchto_disabled_write(struct kernfs_open_file *of,
+					  char *buf, size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->switchto_disabled, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_switchto_disabled = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_switchto_disabled_show,
+	.write			= gf_switchto_disabled_write,
+};
+
 static int gf_status_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -645,6 +676,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "runnable_timeout",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_runnable_timeout,
+	},
+	{
+		.name		= "switchto_disabled",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_switchto_disabled,
 	},
 	{
 		.name		= "status",
