@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	39
+#define GHOST_VERSION	40
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -454,6 +454,7 @@ struct ghost_txn {
 	uint8_t unused;
 	int64_t gtid;
 	int64_t commit_time;	/* the time that the txn commit succeeded/failed */
+	uint64_t cpu_seqnum;
 	/*
 	 * Context-dependent fields.
 	 */

@@ -4986,6 +4986,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	if (*need_rendezvous)
 		smp_store_release(&rq->ghost.rendezvous, rendezvous);
 
+	txn->cpu_seqnum = ++rq->ghost.cpu_seqnum;
 unlock_rq:
 	rq_unlock_irqrestore(rq, &rf);
 done:
