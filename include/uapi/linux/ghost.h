@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	40
+#define GHOST_VERSION	41
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -224,6 +224,7 @@ struct ghost_msg_payload_task_departed {
 	uint64_t cpu_seqnum;
 	int cpu;
 	char from_switchto;
+	char was_current;
 };
 
 struct ghost_msg_payload_task_affinity_changed {

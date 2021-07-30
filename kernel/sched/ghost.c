@@ -3765,6 +3765,7 @@ static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 		payload.from_switchto = true;
 	else
 		payload.from_switchto = false;
+	payload.was_current = task_current(rq, p);
 
 	produce_for_task(p, MSG_TASK_DEPARTED, &payload,
 				 sizeof(payload));
