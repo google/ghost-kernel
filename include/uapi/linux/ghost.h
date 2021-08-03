@@ -377,15 +377,11 @@ enum ghost_base_ops {
 #define SEND_TASK_LATCHED (1 << 10) /* Send TASK_LATCHED at commit time */
 
 /* txn->commit_flags */
-enum txn_commit_at {
-	/*
-	 * commit_flags = 0 indicates a greedy commit (i.e. agent doesn't
-	 * care where the commit happens). The kernel tries to apply the
-	 * commit at the earliest opportunity (e.g. return-to-user).
-	 */
-	COMMIT_AT_SCHEDULE = 1,	    /* commit when oncpu task schedules */
-	COMMIT_AT_TXN_COMMIT,	    /* commit in GHOST_COMMIT_TXN op */
-};
+#define COMMIT_AT_SCHEDULE	(1 << 0) /* commit when oncpu task schedules */
+#define COMMIT_AT_TXN_COMMIT	(1 << 1) /* commit in GHOST_COMMIT_TXN op */
+
+/* Union of all COMMIT_AT_XYZ flags */
+#define COMMIT_AT_FLAGS		(COMMIT_AT_SCHEDULE | COMMIT_AT_TXN_COMMIT)
 
 /* special 'gtid' encodings that can be passed to ghost_run() */
 #define GHOST_NULL_GTID		(0)

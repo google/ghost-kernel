@@ -76,10 +76,10 @@ static bool cpu_deliver_msg_tick(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
 static int agent_target_cpu(struct rq *rq);
 static inline bool ghost_txn_ready(int cpu);
-static bool _ghost_commit_pending_txn(int cpu, enum txn_commit_at where);
+static bool _ghost_commit_pending_txn(int cpu, int where);
 static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err);
 static void ghost_commit_all_greedy_txns(void);
-static void ghost_commit_pending_txn(enum txn_commit_at where);
+static void ghost_commit_pending_txn(int where);
 static inline int queue_decref(struct ghost_queue *q);
 static void release_from_ghost(struct rq *rq, struct task_struct *p);
 static void ghost_wake_agent_on(int cpu);
@@ -4607,11 +4607,16 @@ static inline bool ghost_txn_ready(int cpu)
 	return _ghost_txn_ready(cpu, NULL);
 }
 
+static inline bool _ghost_txn_greedy(int commit_flags)
+{
+	return (commit_flags & COMMIT_AT_FLAGS) == 0;
+}
+
 static inline bool ghost_txn_greedy(int cpu)
 {
-	int commit_flags;
+	int flags;
 
-	return _ghost_txn_ready(cpu, &commit_flags) && commit_flags == 0;
+	return _ghost_txn_ready(cpu, &flags) && _ghost_txn_greedy(flags);
 }
 
 /*
@@ -4624,22 +4629,28 @@ static inline bool ghost_txn_greedy(int cpu)
  * is ignored (indicated by where = -1).
  *
  * Returns 'true' if txn was claimed and 'false' otherwise.
- *
- * N.B. 'where' is deliberately an 'int' as opposed to 'enum txn_commit_at'
- * otherwise the compiler optimizes away the 'where >= 0' conditional below
- * since it "knows" all possible enum values.
  */
 static inline bool ghost_claim_txn(int cpu, int where)
 {
 	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, cpu));
+	int commit_flags;
 
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
 
+	/*
+	 * Ensure that COMMIT_AT_XYZ flag is never a negative value so
+	 * that a commit explicitly requested by the agent can be safely
+	 * indicated by where == -1.
+	 */
+	BUILD_BUG_ON(COMMIT_AT_FLAGS < 0);
+
 	if (!txn || smp_load_acquire(&txn->state) != GHOST_TXN_READY)
 		return false;
 
-	if (where >= 0 && txn->commit_flags != 0 && txn->commit_flags != where)
+	commit_flags = READ_ONCE(txn->commit_flags);
+	commit_flags &= COMMIT_AT_FLAGS;
+	if (where >= 0 && commit_flags != 0 && commit_flags != where)
 		return false;
 
 	/*
@@ -5103,14 +5114,14 @@ static inline void ghost_send_reschedule(struct cpumask *mask)
 }
 #endif
 
-static bool _ghost_commit_pending_txn(int cpu, enum txn_commit_at where)
+static bool _ghost_commit_pending_txn(int cpu, int where)
 {
 	if (unlikely(ghost_claim_txn(cpu, where)))
 		return ghost_commit_txn(cpu, false, NULL);
 	return false;
 }
 
-static void ghost_commit_pending_txn(enum txn_commit_at where)
+static void ghost_commit_pending_txn(int where)
 {
 	int cpu = get_cpu();
 
@@ -5440,8 +5451,8 @@ static int gsys_ghost_commit_txn(ulong __user *user_mask_ptr,
 		if (!_ghost_txn_ready(cpu, &commit_flags))
 			continue;
 
-		greedy_commit = (commit_flags == 0);
-		inline_commit = (commit_flags == COMMIT_AT_TXN_COMMIT);
+		greedy_commit = _ghost_txn_greedy(commit_flags);
+		inline_commit = (commit_flags & COMMIT_AT_TXN_COMMIT);
 
 		if (cpu != this_cpu && !inline_commit) {
 			/*
