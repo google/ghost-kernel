@@ -4749,7 +4749,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 			      int *commit_state, bool *need_rendezvous)
 {
 	gtid_t gtid;
-	struct rq *rq;
+	struct rq *rq = NULL;
 	struct rq_flags rf;
 	struct task_struct *next;
 	bool local_run, resched = false;
@@ -4780,35 +4780,35 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	if (!txn || txn->state != raw_smp_processor_id()) {
 		state = GHOST_TXN_INVALID_CPU;
-		goto done;
+		goto out;
 	}
 
 	if (txn->version != GHOST_TXN_VERSION) {
 		state = GHOST_TXN_UNSUPPORTED_VERSION;
-		goto done;
+		goto out;
 	}
 
 	if (txn->cpu != run_cpu) {
 		state = GHOST_TXN_INVALID_CPU;
-		goto done;
+		goto out;
 	}
 
 	gtid = READ_ONCE(txn->gtid);
 	run_flags = READ_ONCE(txn->run_flags);
 	if (!run_flags_valid(run_flags, supported_run_flags, gtid)) {
 		state = GHOST_TXN_INVALID_FLAGS;
-		goto done;
+		goto out;
 	}
 
 	commit_flags = READ_ONCE(txn->commit_flags);
 	if (!commit_flags_valid(commit_flags, supported_commit_flags)) {
 		state = GHOST_TXN_INVALID_FLAGS;
-		goto done;
+		goto out;
 	}
 
 	if (!cpu_online(run_cpu)) {
 		state = GHOST_TXN_CPU_OFFLINE;
-		goto done;
+		goto out;
 	}
 
 	if (likely(gtid > 0)) {
@@ -4818,7 +4818,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 			rcu_read_unlock();
 			state = next ? GHOST_TXN_INVALID_TARGET :
 				       GHOST_TXN_TARGET_NOT_FOUND;
-			goto done;
+			goto out;
 		}
 
 		rq = task_rq_lock(next, &rf);
@@ -4826,14 +4826,16 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 		if (validate_next_task(rq, next, txn->task_barrier, &state)) {
 			task_rq_unlock(rq, next, &rf);
-			goto done;
+			rq = NULL;
+			goto out;
 		}
 
 		if (!(commit_flags & ALLOW_TASK_ONCPU) ||
 		    (task_cpu(next) != run_cpu)) {
 			if (validate_next_offcpu(rq, next, &state)) {
 				task_rq_unlock(rq, next, &rf);
-				goto done;
+				rq = NULL;
+				goto out;
 			}
 		} else if (task_running(rq, next) &&
 			   rq->ghost.must_resched &&
@@ -4851,7 +4853,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 			 */
 			state = GHOST_TXN_TARGET_STALE;
 			task_rq_unlock(rq, next, &rf);
-			goto done;
+			rq = NULL;
+			goto out;
 		}
 
 		rq = ghost_move_task(rq, next, run_cpu, &rf);
@@ -4860,7 +4863,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	} else {
 		if (gtid < GHOST_IDLE_GTID) {
 			state = GHOST_TXN_INVALID_TARGET;
-			goto done;
+			goto out;
 		}
 		next = NULL;
 		rq = cpu_rq(run_cpu);
@@ -4871,7 +4874,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 		if (!(commit_flags & ALLOW_TASK_ONCPU)) {
 			if (validate_next_offcpu(rq, next, &state))
-				goto unlock_rq;
+				goto out;
 		}
 	}
 
@@ -4881,12 +4884,12 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	 */
 	if (unlikely(!rq->ghost.agent)) {
 		state = GHOST_TXN_NO_AGENT;
-		goto unlock_rq;
+		goto out;
 	}
 
 	if (unlikely(!txn_commit_allowed(rq, gtid, sync))) {
 		state = GHOST_TXN_NOT_PERMITTED;
-		goto unlock_rq;
+		goto out;
 	}
 
 	if (next && !ghost_can_schedule(rq, gtid)) {
@@ -4899,7 +4902,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		 * anywhere else.
 		 */
 		state = GHOST_TXN_CPU_UNAVAIL;
-		goto unlock_rq;
+		goto out;
 	}
 
 	local_run = blocking_run(rq, sync, gtid);
@@ -4917,7 +4920,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		    READ_ONCE(txn->agent_barrier)) {
 			rq->ghost.blocked_in_run = false;
 			state = GHOST_TXN_AGENT_STALE;
-			goto unlock_rq;
+			goto out;
 		}
 	} else {
 		/*
@@ -5037,9 +5040,11 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		smp_store_release(&rq->ghost.rendezvous, rendezvous);
 
 	txn->cpu_seqnum = ++rq->ghost.cpu_seqnum;
-unlock_rq:
-	rq_unlock_irqrestore(rq, &rf);
-done:
+out:
+	if (rq) {
+		lockdep_assert_held(&rq->lock);
+		rq_unlock_irqrestore(rq, &rf);
+	}
 	*commit_state = state;
 	return resched;
 }
