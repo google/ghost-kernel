@@ -28,7 +28,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	41
+#define GHOST_VERSION	42
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -368,9 +368,6 @@ enum ghost_base_ops {
 #define NEED_CPU_NOT_IDLE (1 << 7)  /* Notify agent when a non-idle task is
 				     * scheduled on the cpu.
 				     */
-#define ALLOW_TASK_ONCPU  (1 << 8)  /* If task is already running on remote
-				     * cpu then let it keep running there.
-				     */
 #define ELIDE_PREEMPT     (1 << 9)  /* Do not send TASK_PREEMPT if we preempt
 				     * a previous ghost task on this cpu
 				     */
@@ -379,6 +376,9 @@ enum ghost_base_ops {
 /* txn->commit_flags */
 #define COMMIT_AT_SCHEDULE	(1 << 0) /* commit when oncpu task schedules */
 #define COMMIT_AT_TXN_COMMIT	(1 << 1) /* commit in GHOST_COMMIT_TXN op */
+#define ALLOW_TASK_ONCPU	(1 << 2) /* If task is running on a remote cpu
+					  * then let continue running there.
+					  */
 
 /* Union of all COMMIT_AT_XYZ flags */
 #define COMMIT_AT_FLAGS		(COMMIT_AT_SCHEDULE | COMMIT_AT_TXN_COMMIT)

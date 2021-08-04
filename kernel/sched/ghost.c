@@ -4338,6 +4338,19 @@ static inline bool run_flags_valid(int run_flags, int valid_run_flags,
 	return true;
 }
 
+static inline bool commit_flags_valid(int commit_flags, int valid_commit_flags)
+{
+	if (commit_flags & ~valid_commit_flags)
+		return false;
+
+	/* Exactly one or none of the COMMIT_AT_XYZ flags must be set */
+	BUILD_BUG_ON(sizeof_field(struct ghost_txn, commit_flags) != 1);
+	if (hweight8(commit_flags & COMMIT_AT_FLAGS) > 1)
+		return false;
+
+	return true;
+}
+
 /*
  * ghOSt API to yield local cpu or ping a remote cpu.
  *
@@ -4485,7 +4498,6 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 				    RTLA_ON_BLOCKED	|
 				    RTLA_ON_YIELD	|
 				    NEED_L1D_FLUSH	|
-				    ALLOW_TASK_ONCPU	|
 				    ELIDE_PREEMPT	|
 				    SEND_TASK_LATCHED	|
 				    0;
@@ -4725,19 +4737,23 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	struct rq_flags rf;
 	struct task_struct *next;
 	bool local_run, resched = false;
-	int run_flags, state = GHOST_TXN_COMPLETE;
+	int commit_flags, run_flags, state = GHOST_TXN_COMPLETE;
 	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, run_cpu));
 
-	const int supported_flags = RTLA_ON_PREEMPT	|
-				    RTLA_ON_BLOCKED	|
-				    RTLA_ON_YIELD	|
-				    RTLA_ON_IDLE	|
-				    NEED_L1D_FLUSH	|
-				    NEED_CPU_NOT_IDLE	|
-				    ALLOW_TASK_ONCPU	|
-				    ELIDE_PREEMPT	|
-				    SEND_TASK_LATCHED	|
-				    0;
+	const int supported_run_flags = RTLA_ON_PREEMPT	|
+					RTLA_ON_BLOCKED	|
+					RTLA_ON_YIELD	|
+					RTLA_ON_IDLE	|
+					NEED_L1D_FLUSH	|
+					ELIDE_PREEMPT	|
+					NEED_CPU_NOT_IDLE |
+					SEND_TASK_LATCHED |
+					0;
+
+	const int supported_commit_flags = COMMIT_AT_SCHEDULE	|
+					   COMMIT_AT_TXN_COMMIT	|
+					   ALLOW_TASK_ONCPU	|
+					   0;
 
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(commit_state == NULL);
@@ -4763,7 +4779,13 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	gtid = READ_ONCE(txn->gtid);
 	run_flags = READ_ONCE(txn->run_flags);
-	if (!run_flags_valid(run_flags, supported_flags, gtid)) {
+	if (!run_flags_valid(run_flags, supported_run_flags, gtid)) {
+		state = GHOST_TXN_INVALID_FLAGS;
+		goto done;
+	}
+
+	commit_flags = READ_ONCE(txn->commit_flags);
+	if (!commit_flags_valid(commit_flags, supported_commit_flags)) {
 		state = GHOST_TXN_INVALID_FLAGS;
 		goto done;
 	}
@@ -4791,7 +4813,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 			goto done;
 		}
 
-		if (!(run_flags & ALLOW_TASK_ONCPU) ||
+		if (!(commit_flags & ALLOW_TASK_ONCPU) ||
 		    (task_cpu(next) != run_cpu)) {
 			if (validate_next_offcpu(rq, next, &state)) {
 				task_rq_unlock(rq, next, &rf);
@@ -4831,7 +4853,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		if (gtid == GHOST_IDLE_GTID)
 			next = rq->idle;
 
-		if (!(run_flags & ALLOW_TASK_ONCPU)) {
+		if (!(commit_flags & ALLOW_TASK_ONCPU)) {
 			if (validate_next_offcpu(rq, next, &state))
 				goto unlock_rq;
 		}
