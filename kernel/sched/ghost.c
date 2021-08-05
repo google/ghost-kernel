@@ -63,6 +63,8 @@ int sysctl_ghost_switchto_disable;
 int __read_mostly sysctl_ghost_commit_at_tick;
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p);
+static void _ghost_task_new(struct rq *rq, struct task_struct *p,
+			    bool runnable);
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
 static void ghost_task_blocked(struct rq *rq, struct task_struct *p);
 static void task_dead_ghost(struct task_struct *p);
@@ -567,7 +569,14 @@ static void switched_from_ghost(struct rq *rq, struct task_struct *p)
 	if (unlikely(p->ghost.new_task)) {
 		WARN_ON_ONCE(!task_current(rq, p));
 		p->ghost.new_task = false;
-		ghost_task_new(rq, p);
+		/*
+		 * Task is departing from ghost so don't advertise it as
+		 * runnable otherwise the agent could try to schedule it
+		 * before it sees TASK_DEPARTED (in this case the commit
+		 * fails with GHOST_TXN_INVALID_TARGET which is treated as
+		 * a fatal error by the agent).
+		 */
+		_ghost_task_new(rq, p, /*runnable=*/false);
 		ghost_wake_agent_of(p);
 	}
 
@@ -3656,7 +3665,8 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 	return 0;
 }
 
-static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
+				      bool runnable)
 {
 	struct ghost_msg_payload_task_new payload;
 
@@ -3664,7 +3674,7 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p)
 		return;
 
 	payload.gtid = gtid(p);
-	payload.runnable = task_on_rq_queued(p);
+	payload.runnable = runnable;
 	payload.runtime = p->se.sum_exec_runtime;
 	if (_get_sw_info(p->ghost.enclave, p->ghost.status_word,
 			&payload.sw_info)) {
@@ -4195,7 +4205,7 @@ void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p)
 	}
 }
 
-static void ghost_task_new(struct rq *rq, struct task_struct *p)
+static void _ghost_task_new(struct rq *rq, struct task_struct *p, bool runnable)
 {
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
@@ -4206,7 +4216,12 @@ static void ghost_task_new(struct rq *rq, struct task_struct *p)
        if (p == rq->curr)
                update_curr_ghost(rq);
 
-	task_deliver_msg_task_new(rq, p);
+	task_deliver_msg_task_new(rq, p, runnable);
+}
+
+static void ghost_task_new(struct rq *rq, struct task_struct *p)
+{
+	_ghost_task_new(rq, p, task_on_rq_queued(p));
 }
 
 static void ghost_task_yield(struct rq *rq, struct task_struct *p)
