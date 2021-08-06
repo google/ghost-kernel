@@ -4940,7 +4940,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	if (next && task_running(rq, next)) {
 		/* 'next' is already oncpu */
-		VM_BUG_ON(!(run_flags & ALLOW_TASK_ONCPU));
+		VM_BUG_ON(!(commit_flags & ALLOW_TASK_ONCPU));
 		resched = false;
 
 		/*
