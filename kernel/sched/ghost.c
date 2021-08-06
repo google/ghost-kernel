@@ -81,7 +81,6 @@ static bool _ghost_commit_pending_txn(int cpu, int where);
 static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err);
 static void ghost_commit_all_greedy_txns(void);
 static void ghost_commit_pending_txn(int where);
-static inline int queue_decref(struct ghost_queue *q);
 static void release_from_ghost(struct rq *rq, struct task_struct *p);
 static void ghost_wake_agent_on(int cpu);
 static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
@@ -1658,22 +1657,61 @@ struct ghost_queue {
 	ulong mapsize;		/* size of the vmalloc'ed region */
 
 	struct queue_notifier *notifier;  /* rcu-protected agent wakeup info */
-#ifdef CONFIG_DEBUG_GHOST
-	int fd;	/* Stash away fd for debug. */
-#endif
+
+	struct rcu_head rcu;		/* deferred free glue */
+	struct work_struct free_work;
 };
+
+/*
+ * Free the memory resources associated with the ghost_queue (must be called
+ * in sleepable process context).
+ */
+static void __queue_free_work(struct work_struct *work)
+{
+	struct ghost_queue *q = container_of(work, struct ghost_queue,
+					     free_work);
+	vfree(q->addr);
+	kfree(q->notifier);
+	kfree(q);
+}
+
+void _queue_free_rcu_callback(struct rcu_head *rhp)
+{
+	struct ghost_queue *q = container_of(rhp, struct ghost_queue, rcu);
+
+	/*
+	 * Further defer work to a preemptible process context: the rcu
+	 * callback may be called from a softirq context and cannot block.
+	 */
+	schedule_work(&q->free_work);
+}
 
 static inline int queue_decref(struct ghost_queue *q)
 {
 	ulong flags;
 	int error = 0;
+	bool canfree = false;
 
 	spin_lock_irqsave(&q->lock, flags);
-	if (WARN_ON_ONCE(!q->refs))
+	if (WARN_ON_ONCE(!q->refs)) {
 		error = -EINVAL;
-	else
-		q->refs--;
+	} else {
+		if (--q->refs == 0)
+			canfree = true;
+	}
 	spin_unlock_irqrestore(&q->lock, flags);
+
+	if (canfree) {
+		/*
+		 * We may be called from awkward contexts that hold scheduler
+		 * locks or that are non-preemptible and this runs afoul of
+		 * sleepable locks taken during vfree(q->addr).
+		 *
+		 * Defer freeing of queue memory to an rcu callback (this has
+		 * nothing to do with rcu and we use it solely for convenience).
+		 */
+		call_rcu(&q->rcu, _queue_free_rcu_callback);
+	}
 	return error;
 }
 
@@ -2475,7 +2513,7 @@ struct ghost_sw_region *ghost_create_sw_region(struct ghost_enclave *e,
 }
 
 static int ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
-			     bool forked)
+			   bool forked)
 {
 	int error;
 	unsigned long irq_fl;
@@ -2791,32 +2829,11 @@ static int queue_release(struct inode *inode, struct file *file)
 {
 	struct ghost_queue *q = file->private_data;
 	struct ghost_enclave *e = q->enclave;
-	ulong flags, refs;
 
 	enclave_maybe_del_default_queue(e, q);
 	q->enclave = NULL;
 	kref_put(&e->kref, enclave_release);
-
-	spin_lock_irqsave(&q->lock, flags);
-	refs = q->refs;
-	spin_unlock_irqrestore(&q->lock, flags);
-
-	if (refs) {
-		/*
-		 * XXX we could flag that this queue is not reachable
-		 * from userspace anymore and can be freed when the
-		 * last reference is dropped (e.g. when all referencing
-		 * tasks die or change association).
-		 *
-		 * Just leak memory for now.
-		 */
-		WARN_ONCE(1, "%s: leaking queue with %lu refs", __func__, refs);
-	} else {
-		vfree(q->addr);
-		kfree(q->notifier);
-		kfree(q);
-		/* XXX memcg uncharge */
-	}
+	queue_decref(q);		/* drop inode reference */
 	return 0;
 }
 
@@ -2905,13 +2922,12 @@ static int ghost_create_queue(int elems, int node, int flags,
 		error = fd;
 		goto err_getfd;
 	}
-#ifdef CONFIG_DEBUG_GHOST
-	q->fd = fd;
-#endif
+
 	kref_get(&e->kref);
 	q->enclave = e;
+	queue_incref(q);	/* inode gets its own reference */
+	INIT_WORK(&q->free_work, __queue_free_work);
 
-	/* XXX memcg charge */
 	ghost_fdput_enclave(e, &f_enc);
 	return fd;
 
