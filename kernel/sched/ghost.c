@@ -1639,7 +1639,7 @@ struct ghost_queue {
 	 *  See go/ghost-queue-change for more details.
 	 */
 	spinlock_t lock;
-	ulong refs;
+	struct kref kref;
 
 	struct ghost_enclave *enclave;
 
@@ -1686,42 +1686,29 @@ void _queue_free_rcu_callback(struct rcu_head *rhp)
 	schedule_work(&q->free_work);
 }
 
-static inline int queue_decref(struct ghost_queue *q)
+static void __queue_kref_release(struct kref *k)
 {
-	ulong flags;
-	int error = 0;
-	bool canfree = false;
+	struct ghost_queue *q = container_of(k, struct ghost_queue, kref);
 
-	spin_lock_irqsave(&q->lock, flags);
-	if (WARN_ON_ONCE(!q->refs)) {
-		error = -EINVAL;
-	} else {
-		if (--q->refs == 0)
-			canfree = true;
-	}
-	spin_unlock_irqrestore(&q->lock, flags);
+	/*
+	 * We may be called from awkward contexts that hold scheduler
+	 * locks or that are non-preemptible and this runs afoul of
+	 * sleepable locks taken during vfree(q->addr).
+	 *
+	 * Defer freeing of queue memory to an rcu callback (this has
+	 * nothing to do with rcu and we use it solely for convenience).
+	 */
+	call_rcu(&q->rcu, _queue_free_rcu_callback);
+}
 
-	if (canfree) {
-		/*
-		 * We may be called from awkward contexts that hold scheduler
-		 * locks or that are non-preemptible and this runs afoul of
-		 * sleepable locks taken during vfree(q->addr).
-		 *
-		 * Defer freeing of queue memory to an rcu callback (this has
-		 * nothing to do with rcu and we use it solely for convenience).
-		 */
-		call_rcu(&q->rcu, _queue_free_rcu_callback);
-	}
-	return error;
+static inline void queue_decref(struct ghost_queue *q)
+{
+	kref_put(&q->kref, __queue_kref_release);
 }
 
 static inline void queue_incref(struct ghost_queue *q)
 {
-	ulong flags;
-
-	spin_lock_irqsave(&q->lock, flags);
-	q->refs++;
-	spin_unlock_irqrestore(&q->lock, flags);
+	kref_get(&q->kref);
 }
 
 /* Hold e->lock and the cpu_rsvp lock */
@@ -2643,8 +2630,7 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 	q = p->ghost.dst_q;
 	if (q != NULL) {
 		p->ghost.dst_q = NULL;
-		error = queue_decref(q);
-		VM_BUG_ON(error);
+		queue_decref(q);
 	}
 
 	sw = p->ghost.status_word;
@@ -2895,6 +2881,7 @@ static int ghost_create_queue(int elems, int node, int flags,
 	}
 
 	spin_lock_init(&q->lock);
+	kref_init(&q->kref); /* sets to 1; inode gets its own reference */
 	q->addr = vmalloc_user_node_flags(size, node, GFP_KERNEL);
 	if (!q->addr) {
 		error = -ENOMEM;
@@ -2925,7 +2912,6 @@ static int ghost_create_queue(int elems, int node, int flags,
 
 	kref_get(&e->kref);
 	q->enclave = e;
-	queue_incref(q);	/* inode gets its own reference */
 	INIT_WORK(&q->free_work, __queue_free_work);
 
 	ghost_fdput_enclave(e, &f_enc);
