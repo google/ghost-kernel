@@ -4555,6 +4555,7 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 				    NEED_L1D_FLUSH	|
 				    ELIDE_PREEMPT	|
 				    SEND_TASK_LATCHED	|
+				    DO_NOT_PREEMPT	|
 				    0;
 
 	WARN_ON_ONCE(preemptible());
@@ -4601,6 +4602,12 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	if (unlikely(!rq->ghost.agent)) {
 		task_rq_unlock(rq, next, &rf);
 		return -EINVAL;
+	}
+
+	if ((run_flags & DO_NOT_PREEMPT) &&
+	    (task_has_ghost_policy(rq->curr) || rq->ghost.latched_task)) {
+		task_rq_unlock(rq, next, &rf);
+		return -ESTALE;
 	}
 
 	/*
@@ -4809,6 +4816,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 					NEED_CPU_NOT_IDLE |
 					SEND_TASK_LATCHED |
 					DEFER_LATCHED_PREEMPTION_BY_AGENT |
+					DO_NOT_PREEMPT	|
 					0;
 
 	const int supported_commit_flags = COMMIT_AT_SCHEDULE		|
@@ -4936,6 +4944,12 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	if (unlikely(!txn_commit_allowed(rq, gtid, sync))) {
 		state = GHOST_TXN_NOT_PERMITTED;
+		goto out;
+	}
+
+	if (next && (run_flags & DO_NOT_PREEMPT) &&
+	    (task_has_ghost_policy(rq->curr) || rq->ghost.latched_task)) {
+		state = GHOST_TXN_AGENT_STALE;
 		goto out;
 	}
 
