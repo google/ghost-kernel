@@ -938,7 +938,21 @@ static int validate_next_task(struct rq *rq, struct task_struct *next,
 {
 	lockdep_assert_held(&rq->lock);
 
-	if (!task_has_ghost_policy(next) || next->ghost.agent) {
+	if (next->ghost.agent) {
+		set_txn_state(state, GHOST_TXN_INVALID_TARGET);
+		return -EINVAL;
+	}
+
+	/*
+	 * Task departed, but the agent hasn't yet processed the
+	 * TASK_DEPARTED message.
+	 */
+	if (next->inhibit_task_msgs) {
+		set_txn_state(state, GHOST_TXN_TARGET_STALE);
+		return -EINVAL;
+	}
+
+	if (!task_has_ghost_policy(next)) {
 		set_txn_state(state, GHOST_TXN_INVALID_TARGET);
 		return -EINVAL;
 	}
