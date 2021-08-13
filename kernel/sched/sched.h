@@ -115,6 +115,7 @@ struct ghost_rq {
 	bool skip_latched_preemption;
 	bool pnt_bpf_once;		/* BPF runs at most once in PNT */
 	bool in_pnt_bpf;		/* running BPF at PNT */
+	bool dont_idle_once;		/* Don't idle next time rq->idle runs */
 	int ghost_nr_running;
 	int run_flags;			/* flags passed to 'ghost_run()' */
 	uint64_t cpu_seqnum;		/* history for msgs about this cpu */
@@ -258,6 +259,7 @@ extern int ghost_run_gtid_on(s64 gtid, u32 task_barrier, int run_flags,
 			     int cpu);
 extern int ghost_run_gtid_on_check(s64 gtid, u32 task_barrier, int run_flags,
 				   int cpu);
+extern void ghost_cpu_idle(void);
 
 struct rq_flags;
 #ifdef CONFIG_BPF

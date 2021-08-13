@@ -273,6 +273,11 @@ static void do_idle(void)
 	__current_set_polling();
 	tick_nohz_idle_enter();
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	/* Sets need_resched if rq->ghost.dont_idle_once is set */
+	ghost_cpu_idle();
+#endif
+
 	while (!need_resched()) {
 		rmb();
 

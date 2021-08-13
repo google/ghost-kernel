@@ -5906,6 +5906,22 @@ void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next)
 		ghost_wake_agent_on(agent_target_cpu(rq));
 }
 
+void ghost_cpu_idle(void)
+{
+	struct rq *rq = this_rq();
+	struct rq_flags rf;
+
+	WARN_ON_ONCE(current != rq->idle);
+
+	rq_lock_irq(rq, &rf);
+	if (rq->ghost.dont_idle_once) {
+		set_tsk_need_resched(current);
+		set_preempt_need_resched();
+		rq->ghost.dont_idle_once = false;
+	}
+	rq_unlock_irq(rq, &rf);
+}
+
 unsigned long ghost_cfs_added_load(struct rq *rq)
 {
 	int ghost_nr_running = rq->ghost.ghost_nr_running;

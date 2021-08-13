@@ -61,10 +61,13 @@ bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 	return BPF_PROG_RUN(prog, &ctx) != 1;
 }
 
+#define BPF_GHOST_PNT_DONT_IDLE		1
+
 void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 {
 	struct bpf_ghost_sched_kern ctx = {};
 	struct bpf_prog *prog;
+	int ret;
 
 	lockdep_assert_held(&rq->lock);
 
@@ -83,12 +86,22 @@ void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 	rq_unpin_lock(rq, rf);
 	raw_spin_unlock(&rq->lock);
 
-	BPF_PROG_RUN(prog, &ctx);
+	ret = BPF_PROG_RUN(prog, &ctx);
 
 	raw_spin_lock(&rq->lock);
 	rq_repin_lock(rq, rf);
 
 	rcu_read_unlock();
+
+	if (ret == BPF_GHOST_PNT_DONT_IDLE) {
+		/*
+		 * The next time this rq selects the idle task, it will bail out
+		 * of do_idle() quickly.  Since we unlocked the RQ lock, it's
+		 * possible that this rq will pick something other than the idle
+		 * task, which is fine.
+		 */
+		rq->ghost.dont_idle_once = true;
+	}
 }
 
 static int ghost_sched_tick_attach(struct ghost_enclave *e,
