@@ -61,12 +61,10 @@ bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 	return BPF_PROG_RUN(prog, &ctx) != 1;
 }
 
-/* Returns true if pick_next_task_ghost should retry its loop. */
-bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
+void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 {
 	struct bpf_ghost_sched_kern ctx = {};
 	struct bpf_prog *prog;
-	int ret;
 
 	lockdep_assert_held(&rq->lock);
 
@@ -74,7 +72,7 @@ bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 	prog = rcu_dereference(e->bpf_pnt);
 	if (!prog) {
 		rcu_read_unlock();
-		return false;
+		return;
 	}
 
 	/*
@@ -85,14 +83,12 @@ bool ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 	rq_unpin_lock(rq, rf);
 	raw_spin_unlock(&rq->lock);
 
-	ret = BPF_PROG_RUN(prog, &ctx);
+	BPF_PROG_RUN(prog, &ctx);
 
 	raw_spin_lock(&rq->lock);
 	rq_repin_lock(rq, rf);
 
 	rcu_read_unlock();
-	/* prog returns 1 meaning "retry". */
-	return ret == 1;
 }
 
 static int ghost_sched_tick_attach(struct ghost_enclave *e,
