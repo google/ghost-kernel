@@ -81,6 +81,8 @@ static void ghost_commit_pending_txn(enum txn_commit_at where);
 static inline int queue_decref(struct ghost_queue *q);
 static void release_from_ghost(struct rq *rq, struct task_struct *p);
 static void ghost_wake_agent_on(int cpu);
+static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
+				  bool was_latched);
 
 struct rq *context_switch(struct rq *rq, struct task_struct *prev,
 			  struct task_struct *next, struct rq_flags *rf);
@@ -1009,7 +1011,7 @@ void ghost_latched_task_preempted(struct rq *rq)
 	WARN_ON_ONCE(!rq->ghost.agent);
 
 	if (task_has_ghost_policy(latched)) {
-		ghost_task_preempted(rq, latched);
+		_ghost_task_preempted(rq, latched, true);
 		ghost_wake_agent_of(latched);
 	} else {
 		/*
@@ -2293,31 +2295,22 @@ done:
 	return error;
 }
 
-/* Only called from enclave_release. */
+/*
+ * Only called from enclave_release.  Any users of this SWR had an enclave kref,
+ * so if we're here, they must all have stopped using their SW.  This also
+ * includes anyone mmapping the ghostfs file.
+ *
+ * This does not mean that the SW's were fully freed.  They may have been in the
+ * GHOST_SW_F_CANFREE state.  Userspace may have failed to free them, due to a
+ * crash.
+ */
 static int __sw_region_free(struct ghost_sw_region *swr)
 {
 	struct ghost_sw_region_header *h = swr->header;
 
 	list_del(&swr->list);
 
-	/*
-	 * There cannot be any references to 'region' from either
-	 * userspace or kernel so we don't need to take the lock.
-	 */
-
-	if (h->available != h->capacity) {
-		/*
-		 * XXX agent closed the file descriptor (voluntary or crashed)
-		 * but there are message sources that point into it from the
-		 * kernel.
-		 *
-		 * Until we understand this better just let it leak.
-		 */
-		WARN_ONCE(1, "%s: id/%u capacity/%u and avail/%d",
-			  __func__, h->id, h->capacity, h->available);
-	} else {
-		vfree(h);
-	}
+	vfree(h);
 	kfree(swr);
 
 	/* XXX memcg uncharge */
@@ -3595,7 +3588,8 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 	produce_for_task(p, MSG_TASK_YIELD, &payload, sizeof(payload));
 }
 
-static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p)
+static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
+				     bool from_switchto)
 {
 	struct ghost_msg_payload_task_preempt payload;
 
@@ -3605,7 +3599,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p)
 	payload.gtid = gtid(p);
 	payload.runtime = p->se.sum_exec_runtime;
 	payload.cpu = cpu_of(rq);
-	payload.from_switchto = ghost_in_switchto(rq);
+	payload.from_switchto = from_switchto;
 
 	produce_for_task(p, MSG_TASK_PREEMPT, &payload, sizeof(payload));
 }
@@ -3869,13 +3863,16 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
 
 	lockdep_assert_held(&rq->lock);
 
-	if (rq->ghost.latched_task != p) {
+	if (rq->ghost.latched_task && rq->ghost.latched_task != p) {
 		/*
 		 * We're overwriting a 'latched_task' that never got oncpu.
-		 * If we ever require the kernel to send TASK_PREEMPTED for
-		 * all preemptions, we'll need to do so here.
+		 * From the agent's perspective, this is a preemption, even if
+		 * it is one that the agent implicitly requested by scheduling p
+		 * onto this cpu to replace latched_task.  Contrast this to
+		 * invalidate_cached_tasks(), which moves p from one cpu to
+		 * another.
 		 */
-		;
+		ghost_latched_task_preempted(rq);
 	}
 	rq->ghost.latched_task = p;
 	rq->ghost.must_resched = false;
@@ -3949,8 +3946,11 @@ void ghost_wake_agent_of(struct task_struct *p)
 	ghost_wake_agent_on(task_target_cpu(p));
 }
 
-void ghost_task_preempted(struct rq *rq, struct task_struct *p)
+static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
+				  bool was_latched)
 {
+	bool from_switchto;
+
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
 
@@ -3964,8 +3964,14 @@ void ghost_task_preempted(struct rq *rq, struct task_struct *p)
        if (p == rq->curr)
                update_curr_ghost(rq);
 
+	/*
+	 * If a latched task was preempted then by definition it was not
+	 * part of any switchto chain.
+	 */
+	from_switchto = was_latched ? false : ghost_in_switchto(rq);
+
 	/* Produce MSG_TASK_PREEMPT into 'p->ghost.dst_q' */
-	task_deliver_msg_preempt(rq, p);
+	task_deliver_msg_preempt(rq, p, from_switchto);
 
 	/*
 	 * Wakeup agent on this CPU.
@@ -3977,6 +3983,14 @@ void ghost_task_preempted(struct rq *rq, struct task_struct *p)
 	 */
 	if (rq->ghost.run_flags & RTLA_ON_PREEMPT)
 		schedule_agent(rq, false);
+}
+
+void ghost_task_preempted(struct rq *rq, struct task_struct *p)
+{
+	lockdep_assert_held(&rq->lock);
+	VM_BUG_ON(task_rq(p) != rq);
+
+	_ghost_task_preempted(rq, p, false);
 }
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p)
@@ -4096,20 +4110,19 @@ static inline bool same_process(struct task_struct *p, struct task_struct *q)
 	return p->group_leader == q->group_leader;
 }
 
-static inline bool run_flags_valid(int run_flags, int unsupported_flags)
+static inline bool run_flags_valid(int run_flags, int valid_run_flags,
+				   gtid_t gtid)
 {
-	const int valid_run_flags = RTLA_ON_PREEMPT	|
-				    RTLA_ON_BLOCKED	|
-				    RTLA_ON_YIELD	|
-				    RTLA_ON_IDLE	|
-				    NEED_L1D_FLUSH	|
-				    NEED_CPU_NOT_IDLE	|
-				    ALLOW_TASK_ONCPU;
-
 	if (run_flags & ~valid_run_flags)
 		return false;
 
-	if (run_flags & unsupported_flags)
+	if ((run_flags & RTLA_ON_IDLE) && (gtid != GHOST_NULL_GTID))
+		return false;
+
+	if ((run_flags & NEED_CPU_NOT_IDLE) && (gtid != GHOST_IDLE_GTID))
+		return false;
+
+	if ((gtid == GHOST_AGENT_GTID) && (run_flags != 0))
 		return false;
 
 	return true;
@@ -4129,10 +4142,15 @@ SYSCALL_DEFINE5(ghost_run, s64, gtid, u32, agent_barrier,
 	int error = 0;
 	int this_cpu;
 
+	const int supported_flags = RTLA_ON_IDLE;
+
 	if (!capable(CAP_SYS_NICE))
 		return -EPERM;
 
 	if (run_cpu < 0 || run_cpu >= nr_cpu_ids || !cpu_online(run_cpu))
+		return -EINVAL;
+
+	if (!run_flags_valid(run_flags, supported_flags, gtid))
 		return -EINVAL;
 
 	preempt_disable();
@@ -4140,13 +4158,10 @@ SYSCALL_DEFINE5(ghost_run, s64, gtid, u32, agent_barrier,
 
 	switch (gtid) {
 	case GHOST_NULL_GTID:	/* yield on local cpu */
-		if ((run_flags & ~(RTLA_ON_IDLE | NEED_CPU_NOT_IDLE)) ||
-		    (run_cpu != this_cpu))
+		if (run_cpu != this_cpu)
 			error = -EINVAL;
 		break;
 	case GHOST_AGENT_GTID:	/* ping agent */
-		if (run_flags)
-			error = -EINVAL;
 		break;
 	default:
 		error = -EINVAL;
@@ -4383,6 +4398,14 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	int run_flags, state = GHOST_TXN_COMPLETE;
 	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, run_cpu));
 
+	const int supported_flags = RTLA_ON_PREEMPT	|
+				    RTLA_ON_BLOCKED	|
+				    RTLA_ON_YIELD	|
+				    RTLA_ON_IDLE	|
+				    NEED_L1D_FLUSH	|
+				    NEED_CPU_NOT_IDLE	|
+				    ALLOW_TASK_ONCPU;
+
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(commit_state == NULL);
 	VM_BUG_ON(need_rendezvous == NULL);
@@ -4407,13 +4430,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	gtid = READ_ONCE(txn->gtid);
 	run_flags = READ_ONCE(txn->run_flags);
-	if (!run_flags_valid(run_flags, 0)) {
-		state = GHOST_TXN_INVALID_FLAGS;
-		goto done;
-	}
-
-	if ((run_flags & NEED_CPU_NOT_IDLE) &&
-	    (gtid != GHOST_NULL_GTID && gtid != GHOST_IDLE_GTID)) {
+	if (!run_flags_valid(run_flags, supported_flags, gtid)) {
 		state = GHOST_TXN_INVALID_FLAGS;
 		goto done;
 	}
