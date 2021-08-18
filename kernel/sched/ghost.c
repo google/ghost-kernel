@@ -1067,11 +1067,15 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 	WARN_ON_ONCE(nr_running < rq->ghost.ghost_nr_running);
 	preempted = (nr_running > rq->ghost.ghost_nr_running);
 
-	if (rq->ghost.check_prev_preemption) {
-		if (next || preempted) {
+	/* Preempted by local agent or another sched_class. */
+	if (next || preempted) {
+		/*
+		 * Even though 'preempted' may be set, the task may have blocked
+		 * or yielded.  check_prev_preemption tells us if this is an
+		 * actual preemption: the task did not stop voluntarily.
+		 */
+		if (rq->ghost.check_prev_preemption) {
 			/*
-			 * Preempted by local agent or another sched_class.
-			 *
 			 * Paranoia: force_offcpu guarantees that 'prev' does
 			 * not stay oncpu after producing TASK_PREEMPTED(prev).
 			 */
@@ -1079,21 +1083,17 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 			ghost_wake_agent_of(prev);
 			force_offcpu(rq, false);
 			rq->ghost.check_prev_preemption = false;
-
-			/* did the preemption msg wake up the local agent? */
-			if (!next)
-				next = pick_agent(rq);
 		}
-	}
 
-	/*
-	 * CPU is switching to a non-ghost task while a task is latched.
-	 *
-	 * Treat this like latched_task preemption because we don't know when
-	 * the CPU will be available again so no point in keeping it latched.
-	 */
-	if (rq->ghost.latched_task && preempted) {
-		 ghost_latched_task_preempted(rq);
+		/*
+		 * CPU is switching to a non-ghost task while a task is latched.
+		 *
+		 * Treat this like latched_task preemption because we don't know
+		 * when the CPU will be available again so no point in keeping
+		 * it latched.
+		 */
+		if (rq->ghost.latched_task)
+			ghost_latched_task_preempted(rq);
 
 		/* did the preemption msg wake up the local agent? */
 		if (!next)
@@ -1126,7 +1126,12 @@ static struct task_struct *pick_next_task_ghost(struct rq *rq)
 	 * (e.g. pick_next_task_fair() does this with core tagging enabled).
 	 */
 	if (rq->ghost.switchto_count == 0) {
-		rq->ghost.check_prev_preemption = false;
+		/*
+		 * This is the only time we clear check_prev_preemption without
+		 * sending a TASK_PREEMPT.
+		 */
+		if (rq->ghost.run_flags & ELIDE_PREEMPT)
+			rq->ghost.check_prev_preemption = false;
 	} else {
 		WARN_ON_ONCE(rq->ghost.switchto_count > 0);
 
@@ -1223,6 +1228,7 @@ static struct task_struct *pick_next_task_ghost(struct rq *rq)
 		 */
 		if (unlikely(prev != agent && !rq->ghost.must_resched)) {
 			next = prev;
+			rq->ghost.check_prev_preemption = false;
 			goto done;
 		}
 	}
@@ -4404,7 +4410,9 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 				    RTLA_ON_IDLE	|
 				    NEED_L1D_FLUSH	|
 				    NEED_CPU_NOT_IDLE	|
-				    ALLOW_TASK_ONCPU;
+				    ALLOW_TASK_ONCPU	|
+				    ELIDE_PREEMPT	|
+				    0;
 
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(commit_state == NULL);

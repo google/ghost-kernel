@@ -4283,7 +4283,6 @@ static inline void ghost_prepare_task_switch(struct rq *rq,
 
 	if (rq->ghost.check_prev_preemption) {
 		rq->ghost.check_prev_preemption = false;
-		WARN_ON_ONCE(task_has_ghost_policy(next));
 		ghost_task_preempted(rq, prev);
 		ghost_wake_agent_of(prev);
 	}
@@ -5144,7 +5143,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 			p = pick_next_task_idle(rq);
 		}
 
-		return p;
+		goto out_return;
 	}
 
 restart:
@@ -5153,11 +5152,24 @@ restart:
 	for_each_class(class) {
 		p = class->pick_next_task(rq);
 		if (p)
-			return p;
+			goto out_return;
 	}
 
 	/* The idle class should always have a runnable task: */
 	BUG();
+
+out_return:
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	/*
+	 * pick_next_task opted to keep the same task running, but we left
+	 * check_prev_preemption on!  This will break switchto, which checks
+	 * that field during context_switch()
+	 */
+	if (WARN_ON_ONCE(p == prev && rq->ghost.check_prev_preemption))
+		rq->ghost.check_prev_preemption = false;
+#endif
+
+	return p;
 }
 
 /*
