@@ -609,6 +609,37 @@ static struct kernfs_ops gf_ops_e_switchto_disabled = {
 	.write			= gf_switchto_disabled_write,
 };
 
+static int gf_wake_on_waker_cpu_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->wake_on_waker_cpu));
+	return 0;
+}
+
+static ssize_t gf_wake_on_waker_cpu_write(struct kernfs_open_file *of,
+					  char *buf, size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->wake_on_waker_cpu, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_wake_on_waker_cpu = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_wake_on_waker_cpu_show,
+	.write			= gf_wake_on_waker_cpu_write,
+};
+
 static int gf_status_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -681,6 +712,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "switchto_disabled",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_switchto_disabled,
+	},
+	{
+		.name		= "wake_on_waker_cpu",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_wake_on_waker_cpu,
 	},
 	{
 		.name		= "status",

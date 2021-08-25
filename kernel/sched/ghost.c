@@ -58,7 +58,6 @@ static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
-int __read_mostly sysctl_ghost_wake_on_waker_cpu;
 int __read_mostly sysctl_ghost_commit_at_tick;
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p);
@@ -894,10 +893,10 @@ static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 	 *    pay the cost of task_rq_lock() across sockets which is
 	 *    exactly what ttwu_queue_remote() aims to minimize.
 	 *
-	 * This can be configured using 'sysctl kernel.ghost_wake_on_waker_cpu'
+	 * This can be configured using 'p->ghost.enclave->wake_on_waker_cpu'
 	 * and the default is to keep the task on the same CPU it last ran on.
 	 */
-	if (sysctl_ghost_wake_on_waker_cpu)
+	if (READ_ONCE(p->ghost.enclave->wake_on_waker_cpu))
 		p->ghost.twi.wake_up_cpu = waker_cpu;
 	else
 		p->ghost.twi.wake_up_cpu = task_cpu(p);

@@ -198,6 +198,7 @@ struct ghost_enclave {
 	struct work_struct enclave_destroyer;
 
 	bool switchto_disabled;
+	bool wake_on_waker_cpu;
 
 	unsigned long id;
 	int is_dying;
