@@ -18,6 +18,12 @@
 
 BPF_CALL_2(bpf_ghost_wake_agent, struct bpf_ghost_sched_kern *, ctx, u32, cpu)
 {
+	/*
+	 * Each BPF helper has a corresponding integer in uapi/linux/bpf.h,
+	 * similar to syscall numbers.  Catch any ABI inconsistencies between
+	 * prodkernel and open source.
+	 */
+	BUILD_BUG_ON(BPF_FUNC_ghost_wake_agent != 204);
 	return ghost_wake_agent_on_check(cpu);
 }
 

@@ -4013,6 +4013,7 @@ union bpf_attr {
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
+	FN(placeholder_998),		\
 	FN(placeholder_999),		\
 	FN(placeholder_001),		\
 	FN(placeholder_002),		\
