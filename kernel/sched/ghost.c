@@ -58,7 +58,6 @@ static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
-int __read_mostly sysctl_ghost_commit_at_tick;
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p);
 static void _ghost_task_new(struct rq *rq, struct task_struct *p,
@@ -757,14 +756,11 @@ void ghost_tick(struct rq *rq)
 {
 	struct ghost_enclave *e;
 
-	if (sysctl_ghost_commit_at_tick)
-		ghost_commit_all_greedy_txns();
-
-	ghost_commit_all_greedy_txns();
-
 	rcu_read_lock();
 	e = rcu_dereference(*this_cpu_ptr(&enclave));
 	if (e) {
+		if (READ_ONCE(e->commit_at_tick))
+			ghost_commit_all_greedy_txns();
 		if (!check_runnable_timeout(e, rq)) {
 			kref_get(&e->kref);
 			if (!schedule_work(&e->enclave_destroyer)) {

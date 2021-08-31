@@ -200,6 +200,7 @@ struct ghost_enclave {
 
 	bool switchto_disabled;
 	bool wake_on_waker_cpu;
+	bool commit_at_tick;
 
 	unsigned long id;
 	int is_dying;
