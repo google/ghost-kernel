@@ -3589,14 +3589,14 @@ static int ghost_config_queue_wakeup(int qfd,
 				     int ninfo, int flags)
 {
 	struct ghost_queue *q;
-	struct queue_notifier *qn, *old;
+	struct queue_notifier *old, *qn = NULL;
 	struct ghost_agent_wakeup wakeup[GHOST_MAX_WINFO];
 	struct file *f;
 	ulong fl;
 	int cpu = -1, i;
 	int ret = 0;
 
-	if (ninfo <= 0 || ninfo > GHOST_MAX_WINFO)
+	if (ninfo < 0 || ninfo > GHOST_MAX_WINFO)
 		return -EINVAL;
 
 	if (flags)
@@ -3617,26 +3617,28 @@ static int ghost_config_queue_wakeup(int qfd,
 		goto out_fput;
 	}
 
-	if (copy_from_user(&wakeup, w,
-			   sizeof(struct ghost_agent_wakeup) * ninfo)) {
-		ret = -EFAULT;
-		goto out_fput;
-	}
-
-	for (i = 0; i < ninfo; i++) {
-		/* cpu == -1 implies that it is polling for messages. */
-		cpu = wakeup[i].cpu;
-
-		if (wakeup[i].prio || (cpu < -1) || (cpu >= nr_cpu_ids) ||
-		    !cpu_online(cpu)) {
-			ret = -EINVAL;
+	if (ninfo) {
+		if (copy_from_user(&wakeup, w,
+				   sizeof(struct ghost_agent_wakeup) * ninfo)) {
+			ret = -EFAULT;
 			goto out_fput;
 		}
-	}
 
-	qn = kzalloc(sizeof(struct queue_notifier), GFP_KERNEL);
-	memcpy(qn->winfo, wakeup, sizeof(qn->winfo));
-	qn->wnum = ninfo;
+		for (i = 0; i < ninfo; i++) {
+			/* cpu == -1 implies that it is polling for messages. */
+			cpu = wakeup[i].cpu;
+
+			if (wakeup[i].prio || (cpu < -1) ||
+			    (cpu >= nr_cpu_ids) || !cpu_online(cpu)) {
+				ret = -EINVAL;
+				goto out_fput;
+			}
+		}
+
+		qn = kzalloc(sizeof(struct queue_notifier), GFP_KERNEL);
+		memcpy(qn->winfo, wakeup, sizeof(qn->winfo));
+		qn->wnum = ninfo;
+	}
 
 	spin_lock_irqsave(&q->lock, fl);
 	old = rcu_dereference_protected(q->notifier, lockdep_is_held(&q->lock));
