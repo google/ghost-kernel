@@ -6205,22 +6205,6 @@ static int ghost_get_gtid(int64_t __user *out)
 	return 0;
 }
 
-/* Null syscall for benchmarking */
-static int ghost_null(bool lookup_e, int e_fd)
-{
-	struct ghost_enclave *e;
-	struct fd f_enc = {0};
-	int ret = 0;
-
-	if (!lookup_e)
-		return 0;
-	e = ghost_fdget_enclave(e_fd, &f_enc);
-	if (!e)
-		ret = -EBADF;
-	ghost_fdput_enclave(e, &f_enc);
-	return ret;
-}
-
 /*
  * TODO: Access to the ghost syscalls needs to be restricted, probably via a
  * capability.
@@ -6238,8 +6222,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_NULL:
-		return ghost_null(arg1, arg2);
 	case GHOST_CREATE_QUEUE:
 		return ghost_create_queue(arg1, arg2, arg3,
 					  (ulong __user *)arg4, arg5);
