@@ -494,6 +494,12 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 				(struct ghost_ioc_sw_get_info __user *)arg);
 	case GHOST_IOC_SW_FREE:
 		return ghost_sw_free(e, (void __user *)arg);
+	case GHOST_IOC_CREATE_QUEUE:
+		return ghost_create_queue(e,
+				(struct ghost_ioc_create_queue __user *)arg);
+	case GHOST_IOC_ASSOC_QUEUE:
+		return ghost_associate_queue(
+				(struct ghost_ioc_assoc_queue __user *)arg);
 	}
 	return -ENOIOCTLCMD;
 }

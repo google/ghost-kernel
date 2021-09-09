@@ -3094,17 +3094,24 @@ static const struct file_operations queue_fops = {
 	.mmap			= queue_mmap,
 };
 
-static int ghost_create_queue(int elems, int node, int flags,
-			      ulong __user *mapsize, int e_fd)
+int ghost_create_queue(struct ghost_enclave *e,
+		       struct ghost_ioc_create_queue __user *arg)
 {
 	ulong size;
-	int error = 0, fd;
+	int error = 0, fd, elems, node, flags;
 	struct ghost_queue *q;
 	struct ghost_queue_header *h;
-	struct ghost_enclave *e;
-	struct fd f_enc = {0};
+	struct ghost_ioc_create_queue create_queue;
 
 	const int valid_flags = 0;	/* no flags for now */
+
+	if (copy_from_user(&create_queue, arg,
+			   sizeof(struct ghost_ioc_create_queue)))
+		return -EFAULT;
+
+	elems = create_queue.elems;
+	node = create_queue.node;
+	flags = create_queue.flags;
 
 	/*
 	 * Validate that 'head' and 'tail' are large enough to distinguish
@@ -3130,20 +3137,14 @@ static int ghost_create_queue(int elems, int node, int flags,
 	size += elems * sizeof(struct ghost_msg);
 	size = PAGE_ALIGN(size);
 
-	error = put_user(size, mapsize);
+	error = put_user(size, &arg->mapsize);
 	if (error)
 		return error;
-
-	e = ghost_fdget_enclave(e_fd, &f_enc);
-	if (!e) {
-		error = -EBADF;
-		goto err_enc_fd;
-	}
 
 	q = kzalloc_node(sizeof(struct ghost_queue), GFP_KERNEL, node);
 	if (!q) {
 		error = -ENOMEM;
-		goto err_alloc_queue;
+		return error;
 	}
 
 	spin_lock_init(&q->lock);
@@ -3180,16 +3181,12 @@ static int ghost_create_queue(int elems, int node, int flags,
 	q->enclave = e;
 	INIT_WORK(&q->free_work, __queue_free_work);
 
-	ghost_fdput_enclave(e, &f_enc);
 	return fd;
 
 err_getfd:
 	vfree(q->addr);
 err_vmalloc:
 	kfree(q);
-err_alloc_queue:
-err_enc_fd:
-	ghost_fdput_enclave(e, &f_enc);
 	return error;
 }
 
@@ -3383,8 +3380,7 @@ done:
 	return error;
 }
 
-static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
-				 int barrier, int flags, int *ustatus)
+int ghost_associate_queue(struct ghost_ioc_assoc_queue __user *arg)
 {
 	int error = 0;
 	struct rq *rq;
@@ -3396,11 +3392,20 @@ static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
 	struct ghost_queue *oldq, *newq;
 	int status = 0;
 
+	int fd, barrier, flags;
+	struct ghost_ioc_assoc_queue assoc_queue;
+
+	if (copy_from_user(&assoc_queue, arg,
+			   sizeof(struct ghost_ioc_assoc_queue)))
+		return -EFAULT;
+
+	fd = assoc_queue.fd;
+	barrier = assoc_queue.barrier;
+	flags = assoc_queue.flags;
+	src = assoc_queue.src;
+
 	if (flags != 0)			/* no flags for now */
 		return -EINVAL;
-
-	if (copy_from_user(&src, usrc, sizeof(struct ghost_msg_src)))
-		return -EFAULT;
 
 	/* For now only allow changing task-to-queue association. */
 	if (src.type != GHOST_TASK)
@@ -3479,11 +3484,6 @@ static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
 		status |= GHOST_ASSOC_SF_BRAND_NEW;
 	}
 
-	if (ustatus && copy_to_user(ustatus, &status, sizeof(status))) {
-		error = -EFAULT;
-		goto done;
-	}
-
 	queue_incref(newq);
 	p->ghost.dst_q = newq;
 	if (oldq)
@@ -3493,6 +3493,10 @@ done:
 	if (p)
 		task_rq_unlock(rq, p, &rf);
 	fput(file);
+	/* TODO(b/202070945) */
+	if (!error)
+		error = put_user(status, &arg->status);
+
 	return error;
 }
 
@@ -6222,12 +6226,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_CREATE_QUEUE:
-		return ghost_create_queue(arg1, arg2, arg3,
-					  (ulong __user *)arg4, arg5);
-	case GHOST_ASSOCIATE_QUEUE:
-		return ghost_associate_queue(arg1, (void *)arg2, arg3, arg4,
-					     (int __user *)arg5);
 	case GHOST_SET_DEFAULT_QUEUE:
 		return ghost_set_default_queue(arg1);
 	case GHOST_CONFIG_QUEUE_WAKEUP:

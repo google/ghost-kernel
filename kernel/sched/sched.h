@@ -238,6 +238,9 @@ extern int ghost_sw_get_info(struct ghost_enclave *e,
 			     struct ghost_ioc_sw_get_info __user *arg);
 extern int ghost_sw_free(struct ghost_enclave *e,
 			 struct ghost_sw_info __user *uinfo);
+extern int ghost_create_queue(struct ghost_enclave *e,
+			      struct ghost_ioc_create_queue __user *arg);
+extern int ghost_associate_queue(struct ghost_ioc_assoc_queue __user *arg);
 extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
 extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 
