@@ -69,6 +69,8 @@ static void _ghost_task_new(struct rq *rq, struct task_struct *p,
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
 static void ghost_task_blocked(struct rq *rq, struct task_struct *p);
 static void task_dead_ghost(struct task_struct *p);
+static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
+				      bool runnable);
 static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p);
 static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
@@ -118,6 +120,11 @@ static bool check_same_enclave(int cpu_x, int cpu_y)
 	rcu_read_unlock();
 
 	return x == y;
+}
+
+static inline uint enclave_abi(struct ghost_enclave *e)
+{
+	return GHOST_VERSION;	/* for now all enclaves have the same abi */
 }
 
 /* enclave::is_dying */
@@ -1818,6 +1825,12 @@ static void enclave_actual_release(struct work_struct *w)
 	list_for_each_entry_safe(swr, temp, &e->sw_region_list, list)
 		__sw_region_free(swr);
 
+	/*
+	 * Any inhibited tasks should have been "released" as a side-effect
+	 * of freeing the status_word regions above.
+	 */
+	WARN_ON_ONCE(!list_empty(&e->inhibited_task_list));
+
 	for_each_possible_cpu(cpu)
 		vfree(e->cpu_data[cpu]);
 
@@ -1923,6 +1936,7 @@ struct ghost_enclave *ghost_create_enclave(void)
 	kref_init(&e->kref);
 	INIT_LIST_HEAD(&e->sw_region_list);
 	INIT_LIST_HEAD(&e->task_list);
+	INIT_LIST_HEAD(&e->inhibited_task_list);
 	INIT_LIST_HEAD(&e->ew.link);
 	INIT_WORK(&e->task_reaper, enclave_reap_tasks);
 	INIT_WORK(&e->enclave_actual_release, enclave_actual_release);
@@ -2428,6 +2442,31 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 		error = -EXDEV;
 		goto done;
 	}
+
+	/*
+	 * If msg inhibition is in effect then make sure that the task does
+	 * not jump ABI versions (i.e. it must setsched into an enclave that
+	 * has the same abi version as the one it belonged to earlier).
+	 *
+	 * Note that this is trivially true if the task switches back into
+	 * the same enclave.
+	 *
+	 * Why? different enclaves may be at different ABI versions so when
+	 * the status_word is freed from the original enclave we may not have
+	 * access to the function that produces TASK_NEW in the new ABI.
+	 */
+	if (p->inhibit_task_msgs) {
+		/*
+		 * 'inhibit_task_msgs' is used as a boolean but it actually
+		 * holds the abi of the enclave the task departed from.
+		 */
+		uint old_abi = p->inhibit_task_msgs;
+		if (old_abi != enclave_abi(e)) {
+			error = -EINVAL;
+			goto done;
+		}
+	}
+
 	if (q) {
 		/*
 		 * It's possible for a client task to have no queue: it may have
@@ -2478,6 +2517,112 @@ done:
 }
 
 /*
+ * Caller must call ghost_uninhibit_task_msgs(p) on the task returned from
+ * this function. Ideally we would have had a single function that removes
+ * the task from the 'inhibited_task_list' and enables msgs for this task,
+ * but we must split them up due to locking requirements (removing the
+ * task requires enclave to be locked whereas ungating msgs requires
+ * that no locks are held).
+ */
+struct task_struct *__enclave_remove_inhibited_task(struct ghost_enclave *e,
+						    gtid_t gtid)
+{
+	struct task_struct *p;
+
+	if (kref_read(&e->kref)) {
+		lockdep_assert_held(&e->lock);
+	} else {
+		/*
+		 * No more references to the enclave (called from
+		 * enclave_actual_release()).
+		 */
+	}
+
+	/*
+	 * N.B. cannot use find_task_by_gtid() to do the {gtid->task_struct}
+	 * lookup here since that function expects to be called in an agent
+	 * context.
+	 */
+	list_for_each_entry(p, &e->inhibited_task_list, inhibited_task_list) {
+		if (p->gtid == gtid) {
+			list_del_init(&p->inhibited_task_list);
+			return p;
+		}
+	}
+	return NULL;
+}
+
+static void ghost_uninhibit_task_msgs(struct task_struct *p)
+{
+	struct rq_flags rf;
+	struct rq *rq;
+
+	if (WARN_ON_ONCE(!p->inhibit_task_msgs))
+		goto done;
+
+	rq = task_rq_lock(p, &rf);
+	if (p->state != TASK_DEAD) {
+		/*
+		 * 'inhibit_task_msgs' is used as a boolean but it actually
+		 * holds the abi of the enclave the task departed from.
+		 */
+		const uint old_abi = p->inhibit_task_msgs;
+
+		p->inhibit_task_msgs = 0;	/* open the gate */
+
+		if (ghost_class(p->sched_class)) {
+			WARN_ON_ONCE(old_abi != enclave_abi(p->ghost.enclave));
+			if (p->ghost.new_task) {
+				/*
+				 * Task is oncpu and will produce TASK_NEW on
+				 * the next scheduling edge.
+				 */
+				WARN_ON_ONCE(!task_running(rq, p));
+			} else {
+				const bool runnable = task_on_rq_queued(p);
+				task_deliver_msg_task_new(rq, p, runnable);
+				ghost_wake_agent_of(p);
+			}
+		} else {
+			/*
+			 * Nothing: we opened the gate above so if/when the
+			 * task switches into ghost we'll produce a TASK_NEW
+			 * msg immediately.
+			 */
+		}
+	} else {
+		/*
+		 * There are three possibilities here:
+		 *
+		 * 1. task has finished scheduling for the last time and the
+		 * task_dead() callback is happening concurrently or has
+		 * finished executing.
+		 *
+		 * 2. task is in the middle of its last __schedule() and we
+		 * sneaked in while rq->lock was dropped in one of the PNT
+		 * sched_class callbacks.
+		 *
+		 * 3. task is about to __schedule() for the very last time
+		 * (running concurrently in do_task_dead() or spinning on
+		 * rq->lock in __schedule()).
+		 *
+		 * It would be problematic if we produced TASK_NEW in the
+		 * first scenario since there is no guarantee that we'll
+		 * also produce the corresponding TASK_DEAD and because we
+		 * cannot distinguish (1) from (2) or (3) we won't produce
+		 * the TASK_NEW msg or clear p->inhibit_task_msgs.
+		 *
+		 * Note that release_from_ghost() will free the status_word
+		 * in all of these cases.
+		 */
+	}
+	task_rq_unlock(rq, p, &rf);
+
+done:
+	put_task_struct(p);
+}
+
+/*
  * Only called from enclave_release.  Any users of this SWR had an enclave kref,
  * so if we're here, they must all have stopped using their SW.  This also
  * includes anyone mmapping the ghostfs file.
@@ -2488,11 +2633,54 @@ done:
  */
 static int __sw_region_free(struct ghost_sw_region *swr)
 {
-	struct ghost_sw_region_header *h = swr->header;
+	struct ghost_sw_region_header *header = swr->header;
+	struct ghost_status_word *sw;
+	struct task_struct *p;
+
+	/*
+	 * Enclave is destroyed so scan all status words to find tasks
+	 * where msg gating is in effect (and then turn it off because
+	 * any agent that could have been handling msgs from an earlier
+	 * incarnation is dead).
+	 */
+	for (sw = first_status_word(header);
+	     sw < first_status_word(header) + header->capacity; sw++) {
+		/*
+		 * inuse  canfree
+		 *   0       0		empty slot
+		 *   0       1		not expected (see WARN below)
+		 *   1       0		not expected (see WARN below)
+		 *   1       1		task died or departed (either due to
+		 *			task_reaper or organically while the
+		 *			enclave was being destroyed).
+		 */
+		if (!status_word_inuse(sw)) {
+			WARN_ON_ONCE(status_word_canfree(sw));
+			continue;
+		}
+
+		if (WARN_ON_ONCE(!status_word_canfree(sw)))
+			continue;
+
+		if (!(sw->flags & GHOST_SW_TASK_MSG_GATED)) {
+			/*
+			 * task died while enclave was being destroyed or a
+			 * misbehaving agent did not free status word in its
+			 * TASK_DEAD handler.
+			 */
+			continue;
+		}
+
+		p = __enclave_remove_inhibited_task(swr->enclave, sw->gtid);
+		if (WARN_ON_ONCE(!p))
+			continue;
+
+		ghost_uninhibit_task_msgs(p);
+	}
 
 	list_del(&swr->list);
 
-	vfree(h);
+	vfree(header);
 	kfree(swr);
 
 	/* XXX memcg uncharge */
@@ -3145,7 +3333,10 @@ done:
 int ghost_sw_free(struct ghost_enclave *e, struct ghost_sw_info __user *uinfo)
 {
 	int error;
+	bool gated;
+	gtid_t gtid;
 	ulong flags;
+	struct task_struct *p = NULL;
 	struct ghost_status_word *sw;
 	struct ghost_sw_info info = { 0 };
 
@@ -3163,9 +3354,18 @@ int ghost_sw_free(struct ghost_enclave *e, struct ghost_sw_info __user *uinfo)
 		error = -EINVAL;
 		goto done;
 	}
+	gtid = sw->gtid;
+	gated = sw->flags & GHOST_SW_TASK_MSG_GATED;
 	error = free_status_word_locked(e, sw);
+	if (!error && gated) {
+		p = __enclave_remove_inhibited_task(e, gtid);
+		WARN_ON_ONCE(!p);
+	}
 done:
 	spin_unlock_irqrestore(&e->lock, flags);
+	if (p)
+		ghost_uninhibit_task_msgs(p);
+
 	return error;
 }
 
@@ -3246,6 +3446,24 @@ static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
 	 */
 	if (p->ghost.new_task)
 		status |= GHOST_ASSOC_SF_BRAND_NEW;
+
+	/*
+	 * All task msgs may be inhibited (including TASK_NEW) because the
+	 * agent hasn't finished handling TASK_DEPARTED from the previous
+	 * incarnation. This is similar to 'p->ghost.new_task' check above
+	 * in that TASK_NEW will be produced when the status_word from the
+	 * earlier incarnation is freed.
+	 */
+	if (p->inhibit_task_msgs) {
+		/*
+		 * The status_word associated with the previous incarnation
+		 * of the task is orphaned (it cannot be reached from any
+		 * task struct) so we should never see the GATED flag in
+		 * any "live" status_word.
+		 */
+		WARN_ON_ONCE(sw->flags & GHOST_SW_TASK_MSG_GATED);
+		status |= GHOST_ASSOC_SF_BRAND_NEW;
+	}
 
 	if (ustatus && copy_to_user(ustatus, &status, sizeof(status))) {
 		error = -EFAULT;
@@ -3803,6 +4021,15 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 	if (!p->ghost.dst_q)
 		return -1;
 
+	/*
+	 * Inhibit tasks msgs until agent acknowledges receipt of an earlier
+	 * TASK_DEPARTED (by freeing the task's status_word). This ensures
+	 * that msgs belonging to the previous incarnation of the task are
+	 * drained before any msg from its current incarnation is produced.
+	 */
+	if (p->inhibit_task_msgs)
+		return -1;
+
 	return 0;
 }
 
@@ -4046,21 +4273,70 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 	/* Remove before potentially clearing p->ghost.agent. */
 	__enclave_remove_task(e, p);
 
-	/*
-	 * Annotate the status_word so it can be freed by the agent.
-	 *
-	 * N.B. this must be ordered before the TASK_DEAD message is
-	 * visible to the agent.
-	 *
-	 * N.B. we grab the enclave lock to prevent a misbehaving agent
-	 * from freeing the status_word (or its enclosing sw_region)
-	 * before delivery of the TASK_DEAD message below.
-	 */
-	ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_F_CANFREE);
-	if (p->state == TASK_DEAD)
-		task_deliver_msg_dead(rq, p);
-	else
+	if (p->inhibit_task_msgs) {
+		/*
+		 * Agent is not going to free the status_word since it
+		 * never saw any msgs associated with this incarnation:
+		 * 1. p->state != TASK_DEAD (task departed)
+		 *    task departed, came back into ghost and departed again
+		 *    before agent had a chance to handle the first DEPARTED.
+		 * 2. p->state == TASK_DEAD (task is dead)
+		 *    task departed and came back into ghost while exiting
+		 *    before agent had a chance to handle the DEPARTED msg.
+		 */
+		free_status_word_locked(e, p->ghost.status_word);
+	} else if (p->state != TASK_DEAD) {
+		/* agents cannot setsched out of ghost */
+		WARN_ON_ONCE(is_agent(rq, p));
+
+		ghost_sw_set_flag(p->ghost.status_word,
+				  GHOST_SW_F_CANFREE|GHOST_SW_TASK_MSG_GATED);
 		task_deliver_msg_departed(rq, p);
+
+		/*
+		 * Inhibit all msgs produced by this task until the agent
+		 * acknowledges receipt of TASK_DEPARTED msg (implicitly by
+		 * freeing the status_word). This ensures that when TASK_NEW
+		 * is produced any msgs associated with an earlier incarnation
+		 * have been consumed.
+		 */
+		p->inhibit_task_msgs = enclave_abi(e);
+
+		/*
+		 * Track the task in the enclave's 'inhibited_task_list'.
+		 *
+		 * We must do this because a departed task can re-enter ghost
+		 * while it is exiting and subsequently lose its identity
+		 * (e.g. see go/kcl/390722). It is possible for the task to
+		 * enter a different enclave in which case the fallback in
+		 * kcl/390722 is ineffective.
+		 *
+		 * TODO: declare enclave failure if agent does not free the
+		 * status_word of a departed task within X msec (X should be
+		 * smaller than the e->max_unscheduled timeout):
+		 * - misbehavior of one enclave should not result in a
+		 *   (false-positive) failure of a different enclave.
+		 * - limit the task_struct memory held hostage while they are
+		 *   on the inhibited_task_list.
+		 */
+		get_task_struct(p);
+		WARN_ON_ONCE(!list_empty(&p->inhibited_task_list));
+		list_add_tail(&p->inhibited_task_list, &e->inhibited_task_list);
+	} else {
+		/*
+		 * Annotate the status_word so it can be freed by the agent.
+		 *
+		 * N.B. this must be ordered before the TASK_DEAD message is
+		 * visible to the agent.
+		 *
+		 * N.B. we grab the enclave lock to prevent a misbehaving agent
+		 * from freeing the status_word (or its enclosing sw_region)
+		 * before delivery of the TASK_DEAD message below.
+		 */
+		ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_F_CANFREE);
+		task_deliver_msg_dead(rq, p);
+	}
+	WARN_ON_ONCE(!p->inhibit_task_msgs && p->state != TASK_DEAD);
 
 	/* status_word is off-limits to the kernel */
 	p->ghost.status_word = NULL;

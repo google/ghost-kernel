@@ -184,6 +184,7 @@ struct ghost_enclave {
 
 	struct ghost_queue *def_q;	/* default queue */
 
+	struct list_head inhibited_task_list;
 	struct list_head task_list;	/* all non-agent tasks in the enclave */
 	unsigned long nr_tasks;
 	struct work_struct task_reaper;

@@ -768,6 +768,8 @@ struct task_struct {
 	struct sched_rt_entity		rt;
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	int64_t gtid;			/* ghost tid */
+	uint inhibit_task_msgs;		/* don't produce msgs for this task */
+	struct list_head inhibited_task_list;
 	struct sched_ghost_entity ghost;
 #endif
 #ifdef CONFIG_CGROUP_SCHED

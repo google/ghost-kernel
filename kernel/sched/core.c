@@ -3689,6 +3689,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->rt.on_list		= 0;
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
+	p->inhibit_task_msgs = 0;
+	INIT_LIST_HEAD(&p->inhibited_task_list);
 	sched_ghost_entity_init(p);
 #endif
 
