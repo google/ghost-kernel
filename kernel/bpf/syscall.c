@@ -3018,9 +3018,6 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_SOCK_OPS:
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
-	case BPF_PROG_TYPE_GHOST_SCHED:
-		ret = ghost_sched_bpf_prog_attach(attr, prog);
-		break;
 	default:
 		ret = -EINVAL;
 	}
@@ -3057,8 +3054,6 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_SOCK_OPS:
 		return cgroup_bpf_prog_detach(attr, ptype);
-	case BPF_PROG_TYPE_GHOST_SCHED:
-		return ghost_sched_bpf_prog_detach(attr, ptype);
 	default:
 		return -EINVAL;
 	}

@@ -1460,13 +1460,8 @@ struct bpf_ghost_sched_kern {
 
 struct bpf_prog;
 union bpf_attr;
-enum bpf_prog_type;
-int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog);
-int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
-				enum bpf_prog_type ptype);
-int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog);
+extern int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
+				       struct bpf_prog *prog);
 
 static inline struct pid *task_pid(struct task_struct *task)
 {

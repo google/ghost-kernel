@@ -282,74 +282,6 @@ int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
 	return bpf_link_settle(&link_primer);
 }
 
-/* netns does this to have a packed array of progs[type].  might do this for the
- * task type only, or maybe for all ghost types.
- */
-enum ghost_sched_bpf_attach_type {
-	GHOST_SCHED_BPF_INVALID = -1,
-	GHOST_SCHED_BPF_TICK = 0,
-	GHOST_SCHED_BPF_PNT,
-	MAX_SCHED_BPF_ATTACH_TYPE
-};
-
-static inline enum ghost_sched_bpf_attach_type
-to_ghost_sched_bpf_attach_type(enum bpf_attach_type attach_type)
-{
-	switch (attach_type) {
-	case BPF_GHOST_SCHED_SKIP_TICK:
-		return GHOST_SCHED_BPF_TICK;
-	case BPF_GHOST_SCHED_PNT:
-		return GHOST_SCHED_BPF_PNT;
-	default:
-		return GHOST_SCHED_BPF_INVALID;
-	}
-}
-
-int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog)
-{
-	enum ghost_sched_bpf_attach_type type;
-
-	if (attr->target_fd || attr->attach_flags || attr->replace_bpf_fd)
-		return -EINVAL;
-	type = to_ghost_sched_bpf_attach_type(attr->attach_type);
-	if (type < 0)
-		return -EINVAL;
-
-	/* no task attachable types yet */
-
-	return -1;
-}
-
-int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
-				enum bpf_prog_type ptype)
-{
-	struct bpf_prog *prog;
-	enum ghost_sched_bpf_attach_type type;
-
-	if (attr->attach_flags)
-		return -EINVAL;
-
-	type = to_ghost_sched_bpf_attach_type(attr->attach_type);
-	if (type < 0)
-		return -EINVAL;
-
-	prog = bpf_prog_get_type(attr->attach_bpf_fd, ptype);
-	if (IS_ERR(prog))
-		return PTR_ERR(prog);
-
-	if (prog->expected_attach_type != attr->attach_type) {
-		bpf_prog_put(prog);
-		return -EINVAL;
-	}
-
-	/* no task attachable types yet */
-
-	bpf_prog_put(prog);
-
-	return -1;
-}
-
 static const struct bpf_func_proto *
 ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -423,18 +355,6 @@ const struct bpf_prog_ops ghost_sched_prog_ops = {};
 
 int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
 				struct bpf_prog *prog)
-{
-	return -EINVAL;
-}
-
-int ghost_sched_bpf_prog_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog)
-{
-	return -EINVAL;
-}
-
-int ghost_sched_bpf_prog_detach(const union bpf_attr *attr,
-				enum bpf_prog_type ptype)
 {
 	return -EINVAL;
 }
