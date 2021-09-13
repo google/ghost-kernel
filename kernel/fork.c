@@ -2319,6 +2319,8 @@ static __latent_entropy struct task_struct *copy_process(
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	p->gtid = ghost_alloc_gtid(p);
+	if (ghost_class(p->sched_class))
+		ghost_initialize_status_word(p);
 #endif
 
 	return p;

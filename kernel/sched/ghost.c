@@ -2252,6 +2252,11 @@ static inline bool status_word_canfree(struct ghost_status_word *sw)
 	return sw->flags & GHOST_SW_F_CANFREE;
 }
 
+static inline bool status_word_allocated(struct ghost_status_word *sw)
+{
+	return sw->flags & GHOST_SW_F_ALLOCATED;
+}
+
 static int free_status_word_locked(struct ghost_enclave *e,
 				   struct ghost_status_word *sw)
 {
@@ -2266,7 +2271,7 @@ static int free_status_word_locked(struct ghost_enclave *e,
 		first = first_status_word(header);
 		limit = &first[header->capacity];
 		if (sw >= first && sw < limit) {
-			if (!status_word_inuse(sw)) {
+			if (!status_word_allocated(sw)) {
 				/*
 				 * Trying to free an already free status word?
 				 */
@@ -2302,7 +2307,7 @@ static struct ghost_status_word *lookup_status_word_locked(
 }
 
 static struct ghost_status_word *
-alloc_status_word_locked(struct ghost_enclave *e, uint64_t gtid)
+alloc_status_word_locked(struct ghost_enclave *e)
 {
 	struct ghost_sw_region *region;
 	struct ghost_sw_region_header *header = NULL;
@@ -2333,11 +2338,8 @@ alloc_status_word_locked(struct ghost_enclave *e, uint64_t gtid)
 		/*
 		 * If this slot is free then claim it and adjust 'available'.
 		 */
-		if (!status_word_inuse(found)) {
-			found->flags = GHOST_SW_F_INUSE;
-			found->barrier = 0;
-			found->gtid = gtid;
-			found->runtime = 0;
+		if (!status_word_allocated(found)) {
+			found->flags = GHOST_SW_F_ALLOCATED;
 			header->available--;
 			break;
 		}
@@ -2345,6 +2347,27 @@ alloc_status_word_locked(struct ghost_enclave *e, uint64_t gtid)
 	VM_BUG_ON(n >= header->capacity);
 done:
 	return found;
+}
+
+void ghost_initialize_status_word(struct task_struct *p)
+{
+	struct ghost_status_word *sw = p->ghost.status_word;
+
+	if (WARN_ON_ONCE(!p->ghost.status_word))
+		return;
+
+	if (WARN_ON_ONCE(sw->flags != GHOST_SW_F_ALLOCATED))
+		return;
+
+	sw->gtid = gtid(p);
+	sw->barrier = 0;
+	sw->runtime = 0;
+
+	/*
+	 * Order is important to ensure that agent observes a fully formed
+	 * status_word when discovering tasks from the status_word region.
+	 */
+	ghost_sw_set_flag(sw, GHOST_SW_F_INUSE);
 }
 
 int64_t ghost_alloc_gtid(struct task_struct *p)
@@ -2416,16 +2439,25 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	p->ghost.dst_q = q;
 
 	/* Allocate a status_word */
-	sw = alloc_status_word_locked(e, gtid(p));
+	sw = alloc_status_word_locked(e);
 	if (sw == NULL) {
 		error = -ENOMEM;
 		goto done;
 	}
+
 	kref_get(&e->kref);
 	p->ghost.enclave = e;
 	p->ghost.status_word = sw;
 	p->ghost.new_task = forked;
 
+	if (!forked) {
+		ghost_initialize_status_word(p);
+	} else {
+		/*
+		 * Caller will initialize status_word after allocating gtid
+		 * (see copy_process).
+		 */
+	}
 done:
 	if (error) {
 		if (p->ghost.dst_q) {
