@@ -484,6 +484,8 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 {
 	struct ghost_enclave *e = of_to_e(of);
 
+	if (!(of->file->f_mode & FMODE_WRITE))
+		return -EACCES;
 	switch (cmd) {
 	case GHOST_IOC_NULL:
 		return 0;
