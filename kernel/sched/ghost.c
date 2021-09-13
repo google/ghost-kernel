@@ -3213,7 +3213,7 @@ static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
 
 	oldq = p->ghost.dst_q;
 	sw = p->ghost.status_word;
-	if (unlikely(!oldq || !sw)) {
+	if (unlikely(!sw)) {
 		/* Task is dead or switched to another sched_class */
 		WARN_ON_ONCE(p->state != TASK_DEAD &&
 			     ghost_class(p->sched_class));
@@ -3250,7 +3250,8 @@ static int ghost_associate_queue(int fd, struct ghost_msg_src __user *usrc,
 
 	queue_incref(newq);
 	p->ghost.dst_q = newq;
-	queue_decref(oldq);
+	if (oldq)
+		queue_decref(oldq);
 
 done:
 	if (p)
