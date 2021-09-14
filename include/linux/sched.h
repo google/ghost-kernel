@@ -1455,8 +1455,7 @@ struct task_struct {
 	 */
 };
 
-struct bpf_ghost_sched_kern {
-};
+#define bpf_ghost_sched_kern bpf_ghost_sched
 
 struct bpf_prog;
 union bpf_attr;

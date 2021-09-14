@@ -3834,15 +3834,14 @@ union bpf_attr {
  *		A pointer to a struct socket on success or NULL if the file is
  *		not a socket.
  *
- * long bpf_ghost_wake_agent(struct bpf_ghost_sched *ctx, u32 cpu)
+ * long bpf_ghost_wake_agent(u32 cpu)
  *	Description
  *		Wakes the ghost agent on *cpu*
  *
  *	Return
  *		0 on success, < 0 on error.
  *
- * long bpf_ghost_run_gtid(struct bpf_ghost_sched *ctx, s64 gtid, u32
- *			   task_barrier, s32 run_flags)
+ * long bpf_ghost_run_gtid(s64 gtid, u32 task_barrier, s32 run_flags)
  *	Description
  *		Runs (latches) task **gtid** on this cpu.
  *

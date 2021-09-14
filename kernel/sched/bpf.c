@@ -16,7 +16,7 @@
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 
-BPF_CALL_2(bpf_ghost_wake_agent, struct bpf_ghost_sched_kern *, ctx, u32, cpu)
+BPF_CALL_1(bpf_ghost_wake_agent, u32, cpu)
 {
 	/*
 	 * Each BPF helper has a corresponding integer in uapi/linux/bpf.h,
@@ -31,12 +31,10 @@ static const struct bpf_func_proto bpf_ghost_wake_agent_proto = {
 	.func		= bpf_ghost_wake_agent,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_4(bpf_ghost_run_gtid, struct bpf_ghost_sched_kern *, ctx, s64, gtid,
-	   u32, task_barrier, int, run_flags)
+BPF_CALL_3(bpf_ghost_run_gtid, s64, gtid, u32, task_barrier, int, run_flags)
 {
 	return ghost_run_gtid_on(gtid, task_barrier, run_flags,
 				 smp_processor_id());
@@ -46,10 +44,9 @@ static const struct bpf_func_proto bpf_ghost_run_gtid_proto = {
 	.func		= bpf_ghost_run_gtid,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg1_type	= ARG_ANYTHING,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
-	.arg4_type	= ARG_ANYTHING,
 };
 
 bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
