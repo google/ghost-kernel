@@ -59,7 +59,6 @@ static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
 
-static void ghost_task_new(struct rq *rq, struct task_struct *p);
 static void _ghost_task_new(struct rq *rq, struct task_struct *p,
 			    bool runnable);
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
@@ -4281,7 +4280,7 @@ static void _ghost_task_new(struct rq *rq, struct task_struct *p, bool runnable)
 	task_deliver_msg_task_new(rq, p, runnable);
 }
 
-static void ghost_task_new(struct rq *rq, struct task_struct *p)
+void ghost_task_new(struct rq *rq, struct task_struct *p)
 {
 	_ghost_task_new(rq, p, task_on_rq_queued(p));
 }

@@ -4270,6 +4270,32 @@ static inline void ghost_prepare_task_switch(struct rq *rq,
 	if (prev == rq->ghost.agent)
 		goto done;
 
+	/*
+	 * An oncpu task may switch into ghost (e.g. via a third party calling
+	 * sched_setscheduler(2)) while the rq->lock is dropped in one of the
+	 * pick_next_task handlers (e.g. during CFS idle load balancing).
+	 *
+	 * It is not possible to distinguish this in switched_to_ghost() so
+	 * we resolve 'prev->ghost.new_task' here. Failing to do this has
+	 * dire consequences if 'prev' is runnable since it will languish
+	 * in the kernel forever (in contrast to a blocked task there is
+	 * no trigger forthcoming to produce a TASK_NEW in the future).
+	 */
+	if (unlikely(prev->ghost.new_task)) {
+		WARN_ON_ONCE(prev->ghost.yield_task);
+		WARN_ON_ONCE(prev->ghost.blocked_task);
+
+		/*
+		 * We just produced TASK_NEW so no need to consider 'prev' for
+		 * a preemption edge (see ghost_produce_prev_msgs for details).
+		 */
+		rq->ghost.check_prev_preemption = false;
+
+		prev->ghost.new_task = false;
+		ghost_task_new(rq, prev);
+		ghost_wake_agent_of(prev);
+	}
+
 	/* If we're on the ghost.tasks list, then we're runnable. */
 	if (!list_empty(&prev->ghost.run_list)) {
 		/*

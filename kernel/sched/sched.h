@@ -283,6 +283,7 @@ extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);
 extern int64_t ghost_alloc_gtid(struct task_struct *p);
 extern void ghost_initialize_status_word(struct task_struct *p);
+extern void ghost_task_new(struct rq *rq, struct task_struct *p);
 extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
 			   struct task_struct *next, int switchto_flags);
 
