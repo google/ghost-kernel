@@ -3500,21 +3500,41 @@ done:
 	return error;
 }
 
-static int ghost_set_default_queue(int qfd)
+int ghost_set_default_queue(struct ghost_enclave *e,
+			    struct ghost_ioc_set_default_queue __user *arg)
 {
+	int error = 0;
 	struct fd f_que = {0};
 	struct ghost_queue *newq;
+
+	int qfd;
+	struct ghost_ioc_set_default_queue set_queue;
+
+	if (copy_from_user(&set_queue, arg,
+			   sizeof(struct ghost_ioc_set_default_queue)))
+		return -EFAULT;
+
+	qfd = set_queue.fd;
 
 	f_que = fdget(qfd);
 	newq = fd_to_queue(f_que);
 	if (!newq) {
-		fdput(f_que);
-		return -EBADF;
+		error = -EBADF;
+		goto err_newq;
 	}
-	/* The implied target enclave is whichever newq belongs to. */
-	enclave_set_default_queue(newq->enclave, newq);
+	/*
+	 * Make sure that 'newq' belongs to the same enclave as the one
+	 * whose default queue we are updating.
+	 */
+	if (newq->enclave != e) {
+		error = -EINVAL;
+		goto err_newq;
+	}
+	enclave_set_default_queue(e, newq);
+
+err_newq:
 	fdput(f_que);
-	return 0;
+	return error;
 }
 
 /*
@@ -3588,9 +3608,7 @@ static int agent_target_cpu(struct rq *rq)
 	return target_cpu(agent->ghost.dst_q, task_cpu(agent));
 }
 
-static int ghost_config_queue_wakeup(int qfd,
-				     struct ghost_agent_wakeup __user *w,
-				     int ninfo, int flags)
+int ghost_config_queue_wakeup(struct ghost_ioc_config_queue_wakeup __user *arg)
 {
 	struct ghost_queue *q;
 	struct queue_notifier *old, *qn = NULL;
@@ -3599,6 +3617,19 @@ static int ghost_config_queue_wakeup(int qfd,
 	ulong fl;
 	int cpu = -1, i;
 	int ret = 0;
+
+	int qfd, ninfo, flags;
+	struct ghost_agent_wakeup *w;
+	struct ghost_ioc_config_queue_wakeup config_wakeup;
+
+	if (copy_from_user(&config_wakeup, arg,
+			   sizeof(struct ghost_ioc_config_queue_wakeup)))
+		return -EFAULT;
+
+	qfd = config_wakeup.qfd;
+	w = config_wakeup.w;
+	ninfo = config_wakeup.ninfo;
+	flags = config_wakeup.flags;
 
 	if (ninfo < 0 || ninfo > GHOST_MAX_WINFO)
 		return -EINVAL;
@@ -6226,12 +6257,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_SET_DEFAULT_QUEUE:
-		return ghost_set_default_queue(arg1);
-	case GHOST_CONFIG_QUEUE_WAKEUP:
-		return ghost_config_queue_wakeup(arg1,
-						 (struct ghost_agent_wakeup __user *) arg2,
-						 arg3, arg4);
 	case GHOST_SET_OPTION:
 		return ghost_set_option(arg1, arg2, arg3, arg4);
 	case GHOST_GET_CPU_TIME:
