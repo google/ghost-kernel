@@ -1459,8 +1459,8 @@ struct task_struct {
 
 struct bpf_prog;
 union bpf_attr;
-extern int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
-				       struct bpf_prog *prog);
+extern int ghost_bpf_link_attach(const union bpf_attr *attr,
+				 struct bpf_prog *prog);
 
 static inline struct pid *task_pid(struct task_struct *task)
 {

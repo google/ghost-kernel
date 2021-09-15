@@ -157,128 +157,6 @@ static void ghost_sched_pnt_detach(struct ghost_enclave *e,
 	spin_unlock_irqrestore(&e->lock, irq_fl);
 }
 
-struct bpf_ghost_sched_link {
-	struct bpf_link	link;
-	struct ghost_enclave *e;
-	enum bpf_attach_type ea_type;
-};
-
-static void bpf_ghost_sched_link_release(struct bpf_link *link)
-{
-	struct bpf_ghost_sched_link *sc_link =
-		container_of(link, struct bpf_ghost_sched_link, link);
-	struct ghost_enclave *e = sc_link->e;
-
-	if (WARN_ONCE(!e, "Missing enclave for bpf link ea_type %d!",
-		      sc_link->ea_type))
-		return;
-
-	switch (sc_link->ea_type) {
-	case BPF_GHOST_SCHED_SKIP_TICK:
-		ghost_sched_tick_detach(e, link->prog);
-		break;
-	case BPF_GHOST_SCHED_PNT:
-		ghost_sched_pnt_detach(e, link->prog);
-		break;
-	default:
-		WARN_ONCE(1, "Unexpected release for ea_type %d",
-			  sc_link->ea_type);
-		break;
-	};
-	kref_put(&e->kref, enclave_release);
-	sc_link->e = NULL;
-}
-
-static void bpf_ghost_sched_link_dealloc(struct bpf_link *link)
-{
-	struct bpf_ghost_sched_link *sc_link =
-		container_of(link, struct bpf_ghost_sched_link, link);
-
-	kfree(sc_link);
-}
-
-static const struct bpf_link_ops bpf_ghost_sched_link_ops = {
-	.release = bpf_ghost_sched_link_release,
-	.dealloc = bpf_ghost_sched_link_dealloc,
-};
-
-int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog)
-{
-	struct bpf_link_primer link_primer;
-	struct bpf_ghost_sched_link *sc_link;
-	enum bpf_attach_type ea_type;
-	struct ghost_enclave *e;
-	struct fd f_enc = {0};
-	int err;
-
-	if (attr->link_create.flags)
-		return -EINVAL;
-	if (prog->expected_attach_type != attr->link_create.attach_type)
-		return -EINVAL;
-	ea_type = prog->expected_attach_type;
-
-	switch (ea_type) {
-	case BPF_GHOST_SCHED_SKIP_TICK:
-	case BPF_GHOST_SCHED_PNT:
-		break;
-	default:
-		return -EINVAL;
-	};
-
-	sc_link = kzalloc(sizeof(*sc_link), GFP_USER);
-	if (!sc_link)
-		return -ENOMEM;
-	bpf_link_init(&sc_link->link, BPF_LINK_TYPE_UNSPEC,
-		      &bpf_ghost_sched_link_ops, prog);
-	sc_link->ea_type = ea_type;
-
-	err = bpf_link_prime(&sc_link->link, &link_primer);
-	if (err) {
-		kfree(sc_link);
-		return -EINVAL;
-	}
-
-	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
-	if (!e) {
-		ghost_fdput_enclave(e, &f_enc);
-		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
-		bpf_link_cleanup(&link_primer);
-		return -EBADF;
-	}
-	/*
-	 * On success, sc_link will hold a kref on the enclave, which will get
-	 * put when the link's FD is closed (and thus bpf_link_put ->
-	 * bpf_link_free -> our release).  This is similar to how ghostfs files
-	 * hold a kref on the enclave.  Release is not called on failure.
-	 */
-	kref_get(&e->kref);
-	sc_link->e = e;
-	ghost_fdput_enclave(e, &f_enc);
-
-	switch (ea_type) {
-	case BPF_GHOST_SCHED_SKIP_TICK:
-		err = ghost_sched_tick_attach(e, prog);
-		break;
-	case BPF_GHOST_SCHED_PNT:
-		err = ghost_sched_pnt_attach(e, prog);
-		break;
-	default:
-		pr_warn("bad sched bpf ea_type %d, should be unreachable",
-			ea_type);
-		err = -EINVAL;
-		break;
-	};
-	if (err) {
-		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
-		bpf_link_cleanup(&link_primer);
-		kref_put(&e->kref, enclave_release);
-		return err;
-	}
-
-	return bpf_link_settle(&link_primer);
-}
-
 static const struct bpf_func_proto *
 ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -345,13 +223,159 @@ const struct bpf_verifier_ops ghost_sched_verifier_ops = {
 
 const struct bpf_prog_ops ghost_sched_prog_ops = {
 };
+
+
+struct bpf_ghost_link {
+	struct bpf_link	link;
+	struct ghost_enclave *e;
+	enum bpf_prog_type prog_type;
+	enum bpf_attach_type ea_type;
+};
+
+static void bpf_ghost_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_ghost_link *sc_link =
+		container_of(link, struct bpf_ghost_link, link);
+
+	kfree(sc_link);
+}
+
+static void bpf_ghost_link_release(struct bpf_link *link)
+{
+	struct bpf_ghost_link *sc_link =
+		container_of(link, struct bpf_ghost_link, link);
+	struct ghost_enclave *e = sc_link->e;
+
+	if (WARN_ONCE(!e, "Missing enclave for bpf link ea_type %d!",
+		      sc_link->ea_type))
+		return;
+
+	switch (sc_link->prog_type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (sc_link->ea_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+			ghost_sched_tick_detach(e, link->prog);
+			break;
+		case BPF_GHOST_SCHED_PNT:
+			ghost_sched_pnt_detach(e, link->prog);
+			break;
+		default:
+			WARN_ONCE(1, "Unexpected release for ea_type %d",
+				  sc_link->ea_type);
+			break;
+		}
+		break;
+	default:
+		WARN_ONCE(1, "Unexpected release for prog_type %d",
+			  sc_link->prog_type);
+		break;
+	}
+	kref_put(&e->kref, enclave_release);
+	sc_link->e = NULL;
+}
+
+static const struct bpf_link_ops bpf_ghost_link_ops = {
+	.release = bpf_ghost_link_release,
+	.dealloc = bpf_ghost_link_dealloc,
+};
+
+int ghost_bpf_link_attach(const union bpf_attr *attr,
+			  struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct bpf_ghost_link *sc_link;
+	enum bpf_attach_type ea_type;
+	struct ghost_enclave *e;
+	struct fd f_enc = {0};
+	int err;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+	if (prog->expected_attach_type != attr->link_create.attach_type)
+		return -EINVAL;
+	ea_type = prog->expected_attach_type;
+
+	switch (prog->type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (ea_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+		case BPF_GHOST_SCHED_PNT:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	sc_link = kzalloc(sizeof(*sc_link), GFP_USER);
+	if (!sc_link)
+		return -ENOMEM;
+	bpf_link_init(&sc_link->link, BPF_LINK_TYPE_UNSPEC,
+		      &bpf_ghost_link_ops, prog);
+	sc_link->prog_type = prog->type;
+	sc_link->ea_type = ea_type;
+
+	err = bpf_link_prime(&sc_link->link, &link_primer);
+	if (err) {
+		kfree(sc_link);
+		return -EINVAL;
+	}
+
+	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
+	if (!e) {
+		ghost_fdput_enclave(e, &f_enc);
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
+		bpf_link_cleanup(&link_primer);
+		return -EBADF;
+	}
+	/*
+	 * On success, sc_link will hold a kref on the enclave, which will get
+	 * put when the link's FD is closed (and thus bpf_link_put ->
+	 * bpf_link_free -> our release).  This is similar to how ghostfs files
+	 * hold a kref on the enclave.  Release is not called on failure.
+	 */
+	kref_get(&e->kref);
+	sc_link->e = e;
+	ghost_fdput_enclave(e, &f_enc);
+
+	switch (prog->type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (ea_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+			err = ghost_sched_tick_attach(e, prog);
+			break;
+		case BPF_GHOST_SCHED_PNT:
+			err = ghost_sched_pnt_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad sched bpf ea_type %d, should be unreachable",
+				ea_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (err) {
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
+		bpf_link_cleanup(&link_primer);
+		kref_put(&e->kref, enclave_release);
+		return err;
+	}
+
+	return bpf_link_settle(&link_primer);
+}
+
 #else /* !CONFIG_SCHED_CLASS_GHOST */
 
 const struct bpf_verifier_ops ghost_sched_verifier_ops = {};
 const struct bpf_prog_ops ghost_sched_prog_ops = {};
 
-int ghost_sched_bpf_link_attach(const union bpf_attr *attr,
-				struct bpf_prog *prog)
+int ghost_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	return -EINVAL;
 }

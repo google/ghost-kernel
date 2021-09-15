@@ -4072,7 +4072,7 @@ static int link_create(union bpf_attr *attr)
 		break;
 #endif
 	case BPF_PROG_TYPE_GHOST_SCHED:
-		ret = ghost_sched_bpf_link_attach(attr, prog);
+		ret = ghost_bpf_link_attach(attr, prog);
 		break;
 	default:
 		ret = -EINVAL;
