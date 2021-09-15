@@ -16,7 +16,9 @@
 
 #include <linux/ioctl.h>
 
-#ifndef __KERNEL__
+#ifdef __KERNEL__
+#include <linux/limits.h>
+#else
 #include <limits.h>
 #include <stdint.h>
 #endif
@@ -28,7 +30,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	47
+#define GHOST_VERSION	48
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined

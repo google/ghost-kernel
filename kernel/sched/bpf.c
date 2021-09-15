@@ -107,6 +107,28 @@ void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq, struct rq_flags *rf)
 	}
 }
 
+/*
+ * Returns true (default) if the user wants us to send the message.
+ * Note that our caller holds an RQ lock, and we can't safely unlock it, so
+ * programs at the attach point can't call ghost_run_gtid().
+ */
+bool ghost_bpf_msg_send(struct ghost_enclave *e, struct bpf_ghost_msg *msg)
+{
+	struct bpf_prog *prog;
+	bool send;
+
+	rcu_read_lock();
+	prog = rcu_dereference(e->bpf_msg_send);
+	if (!prog) {
+		rcu_read_unlock();
+		return true;
+	}
+	/* Program returns 0 if they want us to send the message. */
+	send = BPF_PROG_RUN(prog, msg) == 0;
+	rcu_read_unlock();
+	return send;
+}
+
 static int ghost_sched_tick_attach(struct ghost_enclave *e,
 				   struct bpf_prog *prog)
 {
@@ -225,6 +247,64 @@ const struct bpf_prog_ops ghost_sched_prog_ops = {
 };
 
 
+static int ghost_msg_send_attach(struct ghost_enclave *e,
+				 struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_msg_send) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_msg_send, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_msg_send_detach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_msg_send, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
+static const struct bpf_func_proto *
+ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	switch (func_id) {
+	case BPF_FUNC_ghost_wake_agent:
+		return &bpf_ghost_wake_agent_proto;
+	default:
+		return bpf_base_func_proto(func_id);
+	}
+}
+
+static bool ghost_msg_is_valid_access(int off, int size,
+				      enum bpf_access_type type,
+				      const struct bpf_prog *prog,
+				      struct bpf_insn_access_aux *info)
+{
+	/* The verifier guarantees that size > 0. */
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_msg)
+	    || off % size)
+		return false;
+
+	return true;
+}
+
+const struct bpf_verifier_ops ghost_msg_verifier_ops = {
+	.get_func_proto		= ghost_msg_func_proto,
+	.is_valid_access	= ghost_msg_is_valid_access,
+};
+
+const struct bpf_prog_ops ghost_msg_prog_ops = {
+};
+
+
 struct bpf_ghost_link {
 	struct bpf_link	link;
 	struct ghost_enclave *e;
@@ -258,6 +338,17 @@ static void bpf_ghost_link_release(struct bpf_link *link)
 			break;
 		case BPF_GHOST_SCHED_PNT:
 			ghost_sched_pnt_detach(e, link->prog);
+			break;
+		default:
+			WARN_ONCE(1, "Unexpected release for ea_type %d",
+				  sc_link->ea_type);
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (sc_link->ea_type) {
+		case BPF_GHOST_MSG_SEND:
+			ghost_msg_send_detach(e, link->prog);
 			break;
 		default:
 			WARN_ONCE(1, "Unexpected release for ea_type %d",
@@ -300,6 +391,14 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 		switch (ea_type) {
 		case BPF_GHOST_SCHED_SKIP_TICK:
 		case BPF_GHOST_SCHED_PNT:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (ea_type) {
+		case BPF_GHOST_MSG_SEND:
 			break;
 		default:
 			return -EINVAL;
@@ -356,6 +455,18 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 			break;
 		}
 		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (ea_type) {
+		case BPF_GHOST_MSG_SEND:
+			err = ghost_msg_send_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad msg bpf ea_type %d, should be unreachable",
+				ea_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -374,6 +485,9 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 
 const struct bpf_verifier_ops ghost_sched_verifier_ops = {};
 const struct bpf_prog_ops ghost_sched_prog_ops = {};
+
+const struct bpf_verifier_ops ghost_msg_verifier_ops = {};
+const struct bpf_prog_ops ghost_msg_prog_ops = {};
 
 int ghost_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {

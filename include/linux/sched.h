@@ -8,6 +8,7 @@
  */
 
 #include <uapi/linux/sched.h>
+#include <uapi/linux/ghost.h>
 
 #include <asm/current.h>
 
@@ -1456,6 +1457,7 @@ struct task_struct {
 };
 
 #define bpf_ghost_sched_kern bpf_ghost_sched
+#define bpf_ghost_msg_kern bpf_ghost_msg
 
 struct bpf_prog;
 union bpf_attr;

@@ -210,6 +210,7 @@ struct ghost_enclave {
 #ifdef CONFIG_BPF
 	struct bpf_prog *bpf_tick;
 	struct bpf_prog *bpf_pnt;
+	struct bpf_prog *bpf_msg_send;
 #endif
 };
 
@@ -267,6 +268,8 @@ struct rq_flags;
 extern bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq);
 extern void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 			  struct rq_flags *rf);
+extern bool ghost_bpf_msg_send(struct ghost_enclave *e,
+			       struct bpf_ghost_msg *msg);
 #else
 static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
@@ -275,6 +278,11 @@ static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 				 struct rq_flags *rf)
 {
+}
+static inline bool ghost_bpf_msg_send(struct ghost_enclave *e,
+				      struct bpf_ghost_msg *msg)
+{
+	return true;
 }
 #endif
 

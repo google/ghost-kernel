@@ -2010,6 +2010,13 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 		default:
 			return -EINVAL;
 		}
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (expected_attach_type) {
+		case BPF_GHOST_MSG_SEND:
+			return 0;
+		default:
+			return -EINVAL;
+		}
 	case BPF_PROG_TYPE_EXT:
 		if (expected_attach_type)
 			return -EINVAL;
@@ -2963,6 +2970,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_GHOST_SCHED_SKIP_TICK:
 	case BPF_GHOST_SCHED_PNT:
 		return BPF_PROG_TYPE_GHOST_SCHED;
+	case BPF_GHOST_MSG_SEND:
+		return BPF_PROG_TYPE_GHOST_MSG;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -4072,6 +4081,7 @@ static int link_create(union bpf_attr *attr)
 		break;
 #endif
 	case BPF_PROG_TYPE_GHOST_SCHED:
+	case BPF_PROG_TYPE_GHOST_MSG:
 		ret = ghost_bpf_link_attach(attr, prog);
 		break;
 	default:

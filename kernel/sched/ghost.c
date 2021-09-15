@@ -3632,10 +3632,8 @@ static inline int __produce_for_task(struct task_struct *p,
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
 	};
-	/*
-	 * TODO(brho): Call a BPF_PROG here that can modify msg.  Note this
-	 * means BPF can change the type if it wants.  That's fine.
-	 */
+	if (!ghost_bpf_msg_send(p->ghost.enclave, msg))
+		return -ENOMSG;
 	return _produce(p->ghost.dst_q, barrier, msg->type,
 			payload, payload_size);
 }

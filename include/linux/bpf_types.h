@@ -79,6 +79,8 @@ BPF_PROG_TYPE(BPF_PROG_TYPE_LSM, lsm,
 #endif
 BPF_PROG_TYPE(BPF_PROG_TYPE_GHOST_SCHED, ghost_sched, struct bpf_ghost_sched,
 	      struct bpf_ghost_sched_kern)
+BPF_PROG_TYPE(BPF_PROG_TYPE_GHOST_MSG, ghost_msg, struct bpf_ghost_msg,
+	      struct bpf_ghost_msg_kern)
 
 BPF_MAP_TYPE(BPF_MAP_TYPE_ARRAY, array_map_ops)
 BPF_MAP_TYPE(BPF_MAP_TYPE_PERCPU_ARRAY, percpu_array_map_ops)
