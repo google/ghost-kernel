@@ -3690,20 +3690,14 @@ out_fput:
 	return ret;
 }
 
-static int ghost_set_option(int option, ulong val1, ulong val2, ulong val3)
-{
-	switch (option) {
-	default:
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int ghost_get_cpu_time(gtid_t gtid, u64 __user *uruntime)
+int ghost_get_cpu_time(struct ghost_ioc_get_cpu_time __user *arg)
 {
 	struct task_struct *p;
 	u64 time;
+	gtid_t gtid;
+
+	if (copy_from_user(&gtid, &arg->gtid, sizeof(gtid_t)))
+		return -EFAULT;
 
 	rcu_read_lock();
 	p = find_task_by_gtid(gtid);
@@ -3713,7 +3707,7 @@ static int ghost_get_cpu_time(gtid_t gtid, u64 __user *uruntime)
 	}
 	time = task_sched_runtime(p);
 	rcu_read_unlock();
-	if (copy_to_user(uruntime, &time, sizeof(*uruntime)))
+	if (copy_to_user(&arg->runtime, &time, sizeof(u64)))
 		return -EFAULT;
 	return 0;
 }
@@ -6249,18 +6243,13 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 {
 	bool be_nice = true;
 
-	if (op == GHOST_GET_GTID_10 || op == GHOST_GET_GTID_11 ||
-	    op == GHOST_BASE_GET_GTID)
+	if (op == GHOST_BASE_GET_GTID)
 		be_nice = false;
 
 	if (be_nice && !capable(CAP_SYS_NICE))
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_SET_OPTION:
-		return ghost_set_option(arg1, arg2, arg3, arg4);
-	case GHOST_GET_CPU_TIME:
-		return ghost_get_cpu_time((gtid_t)arg1, (u64 __user *)arg2);
 	case GHOST_COMMIT_TXN:
 		return gsys_ghost_commit_txn((ulong __user *)arg1, arg2, arg3);
 	case GHOST_SYNC_GROUP_TXN:
@@ -6273,8 +6262,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 	case GHOST_GTID_LOOKUP:
 		return ghost_gtid_lookup(arg1, arg2, arg3,
 					 (int64_t __user *)arg4);
-	case GHOST_GET_GTID_10:
-	case GHOST_GET_GTID_11:
 	case GHOST_BASE_GET_GTID:
 		return ghost_get_gtid((int64_t __user *)arg1);
 	default:

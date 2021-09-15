@@ -506,6 +506,9 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 	case GHOST_IOC_CONFIG_QUEUE_WAKEUP:
 		return ghost_config_queue_wakeup(
 			(struct ghost_ioc_config_queue_wakeup __user *)arg);
+	case GHOST_IOC_GET_CPU_TIME:
+		return ghost_get_cpu_time(
+				(struct ghost_ioc_get_cpu_time __user *)arg);
 	}
 	return -ENOIOCTLCMD;
 }
