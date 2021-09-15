@@ -5786,8 +5786,8 @@ static inline int64_t ghost_sync_group_cookie(void)
 	return val;
 }
 
-static int gsys_ghost_sync_group(ulong __user *user_mask_ptr,
-				 uint user_mask_len, int flags)
+int ghost_sync_group(struct ghost_enclave *e,
+			  struct ghost_ioc_commit_txn __user *arg)
 {
 	int64_t target;
 	bool failed = false;
@@ -5795,7 +5795,20 @@ static int gsys_ghost_sync_group(ulong __user *user_mask_ptr,
 	int cpu, this_cpu, error, state;
 	cpumask_var_t cpumask, ipimask, rendmask;
 
+	ulong *user_mask_ptr;
+	uint user_mask_len;
+	int flags;
+	struct ghost_ioc_commit_txn commit_txn;
+
 	const int valid_flags = 0;
+
+	if (copy_from_user(&commit_txn, arg,
+			   sizeof(struct ghost_ioc_commit_txn)))
+		return -EFAULT;
+
+	user_mask_ptr = commit_txn.mask_ptr;
+	user_mask_len = commit_txn.mask_len;
+	flags = commit_txn.flags;
 
 	if (flags & ~valid_flags)
 		return -EINVAL;
@@ -5984,8 +5997,8 @@ static int gsys_ghost_sync_group(ulong __user *user_mask_ptr,
 	return !failed;
 }
 
-static int gsys_ghost_commit_txn(ulong __user *user_mask_ptr,
-				 uint user_mask_len, int flags)
+int ioctl_ghost_commit_txn(struct ghost_enclave *e,
+			  struct ghost_ioc_commit_txn __user *arg)
 {
 	int error, state;
 	int cpu, this_cpu;
@@ -5993,7 +6006,20 @@ static int gsys_ghost_commit_txn(ulong __user *user_mask_ptr,
 	bool local_resched = false;
 	cpumask_var_t cpumask, ipimask;
 
+	ulong *user_mask_ptr;
+	uint user_mask_len;
+	int flags;
+	struct ghost_ioc_commit_txn commit_txn;
+
 	const int valid_flags = 0;
+
+	if (copy_from_user(&commit_txn, arg,
+			   sizeof(struct ghost_ioc_commit_txn)))
+		return -EFAULT;
+
+	user_mask_ptr = commit_txn.mask_ptr;
+	user_mask_len = commit_txn.mask_len;
+	flags = commit_txn.flags;
 
 	if (flags & ~valid_flags)
 		return -EINVAL;
@@ -6250,10 +6276,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_COMMIT_TXN:
-		return gsys_ghost_commit_txn((ulong __user *)arg1, arg2, arg3);
-	case GHOST_SYNC_GROUP_TXN:
-		return gsys_ghost_sync_group((ulong __user *)arg1, arg2, arg3);
 	case GHOST_TIMERFD_SETTIME:
 		return ghost_timerfd_settime(arg1, arg2,
 				(const struct __kernel_itimerspec __user *)arg3,

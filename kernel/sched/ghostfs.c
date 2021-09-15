@@ -509,6 +509,12 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 	case GHOST_IOC_GET_CPU_TIME:
 		return ghost_get_cpu_time(
 				(struct ghost_ioc_get_cpu_time __user *)arg);
+	case GHOST_IOC_COMMIT_TXN:
+		return ioctl_ghost_commit_txn(e,
+				(struct ghost_ioc_commit_txn __user *)arg);
+	case GHOST_IOC_SYNC_GROUP_TXN:
+		return ghost_sync_group(e,
+				(struct ghost_ioc_commit_txn __user *)arg);
 	}
 	return -ENOIOCTLCMD;
 }
