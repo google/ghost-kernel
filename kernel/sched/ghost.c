@@ -43,6 +43,11 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
 static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
 static DEFINE_PER_CPU(int64_t, sync_group_cookie);
+/*
+ * Use per-cpu memory instead of stack memory to avoid memsetting.  We only
+ * send one message at a time per cpu.
+ */
+static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
 
 /*
  * We do not want to make 'SG_COOKIE_CPU_BITS' larger than necessary so that
@@ -3560,21 +3565,94 @@ static int _produce(struct ghost_queue *q, uint32_t barrier, int type,
 	return 0;
 }
 
-static inline int produce_for_task(struct task_struct *p, int type,
-				   void *payload, int payload_size)
+
+static inline int __produce_for_task(struct task_struct *p,
+				     struct bpf_ghost_msg *msg,
+				     uint32_t barrier)
 {
-	return _produce(p->ghost.dst_q, task_barrier_get(p),
-			type, payload, payload_size);
+	void *payload;
+	int payload_size;
+
+	msg->seqnum = barrier;
+
+	switch (msg->type) {
+	case MSG_TASK_DEAD:
+		payload = &msg->dead;
+		payload_size = sizeof(msg->dead);
+		break;
+	case MSG_TASK_BLOCKED:
+		payload = &msg->blocked;
+		payload_size = sizeof(msg->blocked);
+		break;
+	case MSG_TASK_WAKEUP:
+		payload = &msg->wakeup;
+		payload_size = sizeof(msg->wakeup);
+		break;
+	case MSG_TASK_NEW:
+		payload = &msg->newt;
+		payload_size = sizeof(msg->newt);
+		break;
+	case MSG_TASK_PREEMPT:
+		payload = &msg->preempt;
+		payload_size = sizeof(msg->preempt);
+		break;
+	case MSG_TASK_YIELD:
+		payload = &msg->yield;
+		payload_size = sizeof(msg->yield);
+		break;
+	case MSG_TASK_DEPARTED:
+		payload = &msg->departed;
+		payload_size = sizeof(msg->departed);
+		break;
+	case MSG_TASK_SWITCHTO:
+		payload = &msg->switchto;
+		payload_size = sizeof(msg->switchto);
+		break;
+	case MSG_TASK_AFFINITY_CHANGED:
+		payload = &msg->affinity;
+		payload_size = sizeof(msg->affinity);
+		break;
+	case MSG_TASK_LATCHED:
+		payload = &msg->latched;
+		payload_size = sizeof(msg->latched);
+		break;
+	case MSG_CPU_TICK:
+		payload = &msg->cpu_tick;
+		payload_size = sizeof(msg->cpu_tick);
+		break;
+	case MSG_CPU_TIMER_EXPIRED:
+		payload = &msg->timer;
+		payload_size = sizeof(msg->timer);
+		break;
+	case MSG_CPU_NOT_IDLE:
+		payload = &msg->cpu_not_idle;
+		payload_size = sizeof(msg->cpu_not_idle);
+		break;
+	default:
+		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
+		return -EINVAL;
+	};
+	/*
+	 * TODO(brho): Call a BPF_PROG here that can modify msg.  Note this
+	 * means BPF can change the type if it wants.  That's fine.
+	 */
+	return _produce(p->ghost.dst_q, barrier, msg->type,
+			payload, payload_size);
 }
 
-static inline int produce_for_agent(struct rq *rq, int type, void *payload,
-				    int payload_size)
+static inline int produce_for_task(struct task_struct *p,
+				   struct bpf_ghost_msg *msg)
+{
+	return __produce_for_task(p, msg, task_barrier_get(p));
+}
+
+static inline int produce_for_agent(struct rq *rq,
+				    struct bpf_ghost_msg *msg)
 {
 	struct task_struct *agent = rq->ghost.agent;
 
 	agent_barrier_inc(rq);
-	return _produce(agent->ghost.dst_q, agent_barrier_get(agent),
-			type, payload, payload_size);
+	return __produce_for_task(agent, msg, agent_barrier_get(agent));
 }
 
 /*
@@ -3604,7 +3682,8 @@ static inline bool cpu_skip_message(struct rq *rq)
 
 static inline bool cpu_deliver_msg_tick(struct rq *rq)
 {
-	struct ghost_msg_payload_cpu_tick payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_cpu_tick *payload = &msg->cpu_tick;
 	struct ghost_enclave *e;
 
 	if (cpu_skip_message(rq))
@@ -3617,38 +3696,41 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 	}
 	rcu_read_unlock();
 
-	payload.cpu = cpu_of(rq);
+	msg->type = MSG_CPU_TICK;
+	payload->cpu = cpu_of(rq);
 
-	return !produce_for_agent(rq, MSG_CPU_TICK, &payload, sizeof(payload));
+	return !produce_for_agent(rq, msg);
 }
 
 /* Returns true if MSG_CPU_TIMER_EXPIRED was produced and false otherwise */
 static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t cookie)
 {
-	struct ghost_msg_payload_timer payload;
-	const int size = sizeof(payload);
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_timer *payload = &msg->timer;
 
 	if (cpu_skip_message(rq))
 		return false;
 
-	payload.cpu = cpu_of(rq);
-	payload.cookie = cookie;
+	msg->type = MSG_CPU_TIMER_EXPIRED;
+	payload->cpu = cpu_of(rq);
+	payload->cookie = cookie;
 
-	return !produce_for_agent(rq, MSG_CPU_TIMER_EXPIRED, &payload, size);
+	return !produce_for_agent(rq, msg);
 }
 
 static bool cpu_deliver_msg_not_idle(struct rq *rq, struct task_struct *next)
 {
-	struct ghost_msg_payload_cpu_not_idle payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_cpu_not_idle *payload = &msg->cpu_not_idle;
 
 	if (cpu_skip_message(rq))
 		return false;
 
-	payload.cpu = cpu_of(rq);
-	payload.next_gtid = gtid(next);
+	msg->type = MSG_CPU_NOT_IDLE;
+	payload->cpu = cpu_of(rq);
+	payload->next_gtid = gtid(next);
 
-	return !produce_for_agent(rq, MSG_CPU_NOT_IDLE,
-				  &payload, sizeof(payload));
+	return !produce_for_agent(rq, msg);
 }
 
 /*
@@ -3729,44 +3811,48 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 				      bool runnable)
 {
-	struct ghost_msg_payload_task_new payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_new *payload = &msg->newt;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.runnable = runnable;
-	payload.runtime = p->se.sum_exec_runtime;
+	msg->type = MSG_TASK_NEW;
+	payload->gtid = gtid(p);
+	payload->runnable = runnable;
+	payload->runtime = p->se.sum_exec_runtime;
 	if (_get_sw_info(p->ghost.enclave, p->ghost.status_word,
-			&payload.sw_info)) {
+			 &payload->sw_info)) {
 		WARN(1, "New task PID %d didn't have a status word!", p->pid);
 		return;
 	}
 
-	produce_for_task(p, MSG_TASK_NEW, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 {
-
-	struct ghost_msg_payload_task_yield payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_yield *payload = &msg->yield;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.runtime = p->se.sum_exec_runtime;
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
-	payload.from_switchto = ghost_in_switchto(rq);
+	msg->type = MSG_TASK_YIELD;
+	payload->gtid = gtid(p);
+	payload->runtime = p->se.sum_exec_runtime;
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->from_switchto = ghost_in_switchto(rq);
 
-	produce_for_task(p, MSG_TASK_YIELD, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 				     bool from_switchto, bool was_latched)
 {
-	struct ghost_msg_payload_task_preempt payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_preempt *payload = &msg->preempt;
 
 	if (__task_deliver_common(rq, p))
 		return;
@@ -3785,67 +3871,75 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	 */
 	WARN_ON_ONCE(from_switchto && rq->ghost.switchto_count > 0);
 
-	payload.gtid = gtid(p);
-	payload.runtime = p->se.sum_exec_runtime;
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
-	payload.from_switchto = from_switchto;
-	payload.was_latched = was_latched;
+	msg->type = MSG_TASK_PREEMPT;
+	payload->gtid = gtid(p);
+	payload->runtime = p->se.sum_exec_runtime;
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->from_switchto = from_switchto;
+	payload->was_latched = was_latched;
 
-	produce_for_task(p, MSG_TASK_PREEMPT, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_blocked payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_blocked *payload = &msg->blocked;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.runtime = p->se.sum_exec_runtime;
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
-	payload.from_switchto = ghost_in_switchto(rq);
+	msg->type = MSG_TASK_BLOCKED;
+	payload->gtid = gtid(p);
+	payload->runtime = p->se.sum_exec_runtime;
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->from_switchto = ghost_in_switchto(rq);
 
-	produce_for_task(p, MSG_TASK_BLOCKED, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_dead payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_dead *payload = &msg->dead;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	produce_for_task(p, MSG_TASK_DEAD, &payload, sizeof(payload));
+	msg->type = MSG_TASK_DEAD;
+	payload->gtid = gtid(p);
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_departed payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_departed *payload = &msg->departed;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	msg->type = MSG_TASK_DEAD;
+	payload->gtid = gtid(p);
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	if (task_current(rq, p) && ghost_in_switchto(rq))
-		payload.from_switchto = true;
+		payload->from_switchto = true;
 	else
-		payload.from_switchto = false;
-	payload.was_current = task_current(rq, p);
+		payload->from_switchto = false;
+	payload->was_current = task_current(rq, p);
 
-	produce_for_task(p, MSG_TASK_DEPARTED, &payload,
-				 sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p)
 {
-	struct ghost_msg_payload_task_affinity_changed payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_affinity_changed *payload =
+		&msg->affinity;
 
 	/*
 	 * A running task can be switched into ghost while it is executing
@@ -3859,27 +3953,29 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
+	msg->type = MSG_TASK_AFFINITY_CHANGED;
+	payload->gtid = gtid(p);
 
-	produce_for_task(p, MSG_TASK_AFFINITY_CHANGED, &payload,
-			 sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
 				     bool latched_preempt)
 {
-	struct ghost_msg_payload_task_latched payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_latched *payload = &msg->latched;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.commit_time = ktime_get_ns();
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
-	payload.latched_preempt = latched_preempt;
+	msg->type = MSG_TASK_LATCHED;
+	payload->gtid = gtid(p);
+	payload->commit_time = ktime_get_ns();
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->latched_preempt = latched_preempt;
 
-	produce_for_task(p, MSG_TASK_LATCHED, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static inline bool deferrable_wakeup(struct task_struct *p)
@@ -3898,32 +3994,37 @@ static inline bool deferrable_wakeup(struct task_struct *p)
 
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_wakeup payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_wakeup *payload = &msg->wakeup;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.deferrable = deferrable_wakeup(p);
-	payload.last_ran_cpu = p->ghost.twi.last_ran_cpu;
-	payload.wake_up_cpu = p->ghost.twi.wake_up_cpu;
-	payload.waker_cpu = p->ghost.twi.waker_cpu;
-	produce_for_task(p, MSG_TASK_WAKEUP, &payload, sizeof(payload));
+	msg->type = MSG_TASK_WAKEUP;
+	payload->gtid = gtid(p);
+	payload->deferrable = deferrable_wakeup(p);
+	payload->last_ran_cpu = p->ghost.twi.last_ran_cpu;
+	payload->wake_up_cpu = p->ghost.twi.wake_up_cpu;
+	payload->waker_cpu = p->ghost.twi.waker_cpu;
+
+	produce_for_task(p, msg);
 }
 
 static void task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_msg_payload_task_switchto payload;
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_switchto *payload = &msg->switchto;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	payload.gtid = gtid(p);
-	payload.runtime = p->se.sum_exec_runtime;
-	payload.cpu = cpu_of(rq);
-	payload.cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	msg->type = MSG_TASK_SWITCHTO;
+	payload->gtid = gtid(p);
+	payload->runtime = p->se.sum_exec_runtime;
+	payload->cpu = cpu_of(rq);
+	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
 
-	produce_for_task(p, MSG_TASK_SWITCHTO, &payload, sizeof(payload));
+	produce_for_task(p, msg);
 }
 
 static void release_from_ghost(struct rq *rq, struct task_struct *p)

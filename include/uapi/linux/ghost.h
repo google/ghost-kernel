@@ -280,6 +280,26 @@ struct ghost_msg_payload_timer {
 	uint64_t cookie;
 };
 
+struct bpf_ghost_msg {
+	union {
+		struct ghost_msg_payload_task_dead	dead;
+		struct ghost_msg_payload_task_blocked	blocked;
+		struct ghost_msg_payload_task_wakeup	wakeup;
+		struct ghost_msg_payload_task_new	newt;
+		struct ghost_msg_payload_task_preempt	preempt;
+		struct ghost_msg_payload_task_yield	yield;
+		struct ghost_msg_payload_task_departed	departed;
+		struct ghost_msg_payload_task_switchto	switchto;
+		struct ghost_msg_payload_task_affinity_changed	affinity;
+		struct ghost_msg_payload_task_latched	latched;
+		struct ghost_msg_payload_cpu_tick	cpu_tick;
+		struct ghost_msg_payload_timer		timer;
+		struct ghost_msg_payload_cpu_not_idle	cpu_not_idle;
+	};
+	uint16_t type;
+	uint32_t seqnum;
+};
+
 #ifdef __cplusplus
 #include <atomic>
 typedef std::atomic<uint32_t> _ghost_ring_index_t;
