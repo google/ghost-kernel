@@ -3841,6 +3841,7 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->agent_data = 0;
 	payload->from_switchto = ghost_in_switchto(rq);
 
 	produce_for_task(p, msg);
@@ -3874,6 +3875,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
+	payload->agent_data = 0;
 	payload->from_switchto = from_switchto;
 	payload->was_latched = was_latched;
 
@@ -4000,6 +4002,7 @@ static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 
 	msg->type = MSG_TASK_WAKEUP;
 	payload->gtid = gtid(p);
+	payload->agent_data = 0;
 	payload->deferrable = deferrable_wakeup(p);
 	payload->last_ran_cpu = p->ghost.twi.last_ran_cpu;
 	payload->wake_up_cpu = p->ghost.twi.wake_up_cpu;
