@@ -250,6 +250,7 @@ extern int ioctl_ghost_commit_txn(struct ghost_enclave *e,
 				 struct ghost_ioc_commit_txn __user *arg);
 extern int ghost_sync_group(struct ghost_enclave *e,
 			    struct ghost_ioc_commit_txn __user *arg);
+extern int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg);
 extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
 extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 

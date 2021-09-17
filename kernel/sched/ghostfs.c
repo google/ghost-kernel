@@ -515,6 +515,9 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 	case GHOST_IOC_SYNC_GROUP_TXN:
 		return ghost_sync_group(e,
 				(struct ghost_ioc_commit_txn __user *)arg);
+	case GHOST_IOC_TIMERFD_SETTIME:
+		return ghost_timerfd_settime(
+				(struct ghost_ioc_timerfd_settime __user *)arg);
 	}
 	return -ENOIOCTLCMD;
 }

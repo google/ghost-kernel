@@ -6168,19 +6168,28 @@ static int ghost_timerfd_validate(struct timerfd_ghost *timerfd_ghost)
 int do_timerfd_settime(int ufd, int flags, const struct itimerspec64 *new,
 		       struct itimerspec64 *old, struct timerfd_ghost *tfdl);
 
-static int ghost_timerfd_settime(int timerfd, int flags,
-				 const struct __kernel_itimerspec __user *utmr,
-				 struct __kernel_itimerspec __user *otmr,
-				 struct timerfd_ghost __user *utfdl)
+int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 {
-	struct timerfd_ghost timerfd_ghost;
 	struct itimerspec64 new, old;
 	int ret;
 
-	if (get_itimerspec64(&new, utmr))
+	int timerfd, flags;
+	const struct __kernel_itimerspec *itmr;
+	struct __kernel_itimerspec *otmr;
+	struct timerfd_ghost timerfd_ghost;
+	struct ghost_ioc_timerfd_settime settime_data;
+
+	if (copy_from_user(&settime_data, arg,
+			   sizeof(struct ghost_ioc_timerfd_settime)))
 		return -EFAULT;
 
-	if (copy_from_user(&timerfd_ghost, utfdl, sizeof(timerfd_ghost)))
+	timerfd = settime_data.timerfd;
+	flags = settime_data.flags;
+	itmr = settime_data.in_tmr;
+	otmr = settime_data.out_tmr;
+	timerfd_ghost = settime_data.timerfd_ghost;
+
+	if (get_itimerspec64(&new, itmr))
 		return -EFAULT;
 
 	ret = ghost_timerfd_validate(&timerfd_ghost);
@@ -6276,11 +6285,6 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 		return -EPERM;
 
 	switch (op) {
-	case GHOST_TIMERFD_SETTIME:
-		return ghost_timerfd_settime(arg1, arg2,
-				(const struct __kernel_itimerspec __user *)arg3,
-				(struct __kernel_itimerspec __user *)arg4,
-				(struct timerfd_ghost __user *)arg5);
 	case GHOST_GTID_LOOKUP:
 		return ghost_gtid_lookup(arg1, arg2, arg3,
 					 (int64_t __user *)arg4);
