@@ -3921,7 +3921,7 @@ static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 	if (__task_deliver_common(rq, p))
 		return;
 
-	msg->type = MSG_TASK_DEAD;
+	msg->type = MSG_TASK_DEPARTED;
 	payload->gtid = gtid(p);
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
