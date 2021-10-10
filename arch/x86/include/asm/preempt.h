@@ -4,6 +4,7 @@
 
 #include <asm/rmwcc.h>
 #include <asm/percpu.h>
+#include <linux/kernel.h>
 #include <linux/thread_info.h>
 
 DECLARE_PER_CPU(int, __preempt_count);
@@ -103,10 +104,27 @@ extern void ghost_commit_greedy_txn(void);
  */
 static __always_inline bool should_resched(int preempt_offset)
 {
+	if (likely(raw_cpu_read_4(__preempt_count) != preempt_offset))
+		return false;
+
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	ghost_commit_greedy_txn();
+	/*
+	 * N.B. when CONFIG_PREEMPTION=y, every preempt_enable() for a nesting
+	 * preempt_disable() could lead to the ghost_commit_greedy_txn(), that
+	 * would cause a deadlock. E.g., ttwu_queue()'s rq_unlock() could lead
+	 * to task_rq_lock() while holding pi_lock. So the early return above.
+	 *
+	 * N.B. we use RCU read-side primitives in ghost_claim_txn(), while we
+	 * are likely to invoke should_resched() in the very early kernel boot
+	 * sequence, E.g., from cgroup_init_subsys's mutex_unlock(). To ensure
+	 * e.g. per-CPU areas setup has been done beforehand, checking the
+	 * system state like below looks sufficient and simple.
+	 */
+	if (likely(system_state >= SYSTEM_SCHEDULING))
+		ghost_commit_greedy_txn();
 #endif
-	return unlikely(raw_cpu_read_4(__preempt_count) == preempt_offset);
+
+	return true;
 }
 
 #ifdef CONFIG_PREEMPTION

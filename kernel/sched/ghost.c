@@ -4052,7 +4052,7 @@ static void ghost_wake_agent_on(int cpu)
 	int this_cpu = get_cpu();
 
 	__ghost_wake_agent_on(cpu, this_cpu, /*check_caller_enclave=*/ false);
-	put_cpu();
+	preempt_enable_no_resched();
 }
 
 int ghost_wake_agent_on_check(int cpu)
@@ -4062,7 +4062,7 @@ int ghost_wake_agent_on_check(int cpu)
 
 	ret = __ghost_wake_agent_on(cpu, this_cpu,
 				    /*check_caller_enclave=*/ true);
-	put_cpu();
+	preempt_enable_no_resched();
 	return ret;
 }
 
@@ -5030,13 +5030,15 @@ static void ghost_commit_pending_txn(enum txn_commit_at where)
 	_ghost_commit_pending_txn(cpu, where);
 	rcu_read_unlock();
 
-	put_cpu();
+	/* We might be called from within the scheduler */
+	preempt_enable_no_resched();
 }
 
-extern void ghost_commit_greedy_txn(void)
+void ghost_commit_greedy_txn(void)
 {
 	ghost_commit_pending_txn(0);	/* Commit a greedy pending txn */
 }
+EXPORT_SYMBOL_GPL(ghost_commit_greedy_txn);
 
 void ghost_commit_all_greedy_txns(void)
 {
