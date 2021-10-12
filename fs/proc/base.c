@@ -3156,6 +3156,11 @@ static int proc_stack_depth(struct seq_file *m, struct pid_namespace *ns,
 static const struct file_operations proc_task_operations;
 static const struct inode_operations proc_task_inode_operations;
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+static const struct file_operations proc_ghost_dir_operations;
+static const struct inode_operations proc_ghost_dir_inode_operations;
+#endif
+
 static const struct pid_entry tgid_base_stuff[] = {
 	DIR("task",       S_IRUGO|S_IXUGO, proc_task_inode_operations, proc_task_operations),
 	DIR("fd",         S_IRUSR|S_IXUSR, proc_fd_inode_operations, proc_fd_operations),
@@ -3265,6 +3270,10 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_SECCOMP_CACHE_DEBUG
 	ONE("seccomp_cache", S_IRUSR, proc_pid_seccomp_cache),
+#endif
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	DIR("ghost",	S_IRUGO|S_IXUGO, proc_ghost_dir_inode_operations,
+	    proc_ghost_dir_operations),
 #endif
 };
 
@@ -3831,3 +3840,58 @@ void __init set_proc_pid_nlink(void)
 	nlink_tid = pid_entry_nlink(tid_base_stuff, ARRAY_SIZE(tid_base_stuff));
 	nlink_tgid = pid_entry_nlink(tgid_base_stuff, ARRAY_SIZE(tgid_base_stuff));
 }
+
+#ifdef CONFIG_SCHED_CLASS_GHOST
+
+static ssize_t proc_ghost_gtid_read(struct file *file, char __user *buf,
+				    size_t count, loff_t *ppos)
+{
+	struct task_struct *task = get_proc_task(file_inode(file));
+	char buffer[32];
+	size_t len;
+
+	if (!task)
+		return -ESRCH;
+
+	len = snprintf(buffer, sizeof(buffer), "%ld\n",
+		       task->gtid);
+	WARN_ON_ONCE(len >= sizeof(buffer));
+	put_task_struct(task);
+	return simple_read_from_buffer(buf, count, ppos, buffer, len);
+}
+
+static const struct file_operations proc_ghost_gtid_operations = {
+	.read           = proc_ghost_gtid_read,
+	.llseek         = generic_file_llseek,
+};
+
+static const struct pid_entry ghost_dir_stuff[] = {
+	REG("gtid",     S_IRUGO, proc_ghost_gtid_operations),
+};
+
+static struct dentry *proc_ghost_dir_lookup(struct inode *dir,
+					    struct dentry *dentry,
+					    unsigned int flags)
+{
+	return proc_pident_lookup(dir, dentry, ghost_dir_stuff,
+				  ghost_dir_stuff + ARRAY_SIZE(ghost_dir_stuff));
+}
+
+static int proc_ghost_dir_readdir(struct file *file, struct dir_context *ctx)
+{
+	return proc_pident_readdir(file, ctx, ghost_dir_stuff,
+				   ARRAY_SIZE(ghost_dir_stuff));
+}
+
+static const struct inode_operations proc_ghost_dir_inode_operations = {
+	.lookup         = proc_ghost_dir_lookup,
+	.getattr        = pid_getattr,
+};
+
+static const struct file_operations proc_ghost_dir_operations = {
+	.read           = generic_read_dir,
+	.iterate_shared = proc_ghost_dir_readdir,
+	.llseek         = default_llseek,
+};
+
+#endif
