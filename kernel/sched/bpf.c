@@ -283,6 +283,7 @@ ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+#include <uapi/linux/ghost.h>
 static bool ghost_msg_is_valid_access(int off, int size,
 				      enum bpf_access_type type,
 				      const struct bpf_prog *prog,

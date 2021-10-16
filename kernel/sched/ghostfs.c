@@ -13,9 +13,6 @@
 
 #include "sched.h"
 
-#include "ghost_uapi.h"
-#include "ghost.h"
-
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/sysfs.h>
@@ -26,6 +23,10 @@
 #include <linux/user_namespace.h>
 
 #include "../../fs/kernfs/kernfs-internal.h"
+
+#define __INCLUDE_KERNEL_SCHED_GHOST
+#include "ghost_uapi.h"
+#include "ghost.h"
 
 /* Helper for when you "echo foo > ctl" without the -n. */
 static void strip_slash_n(char *buf, size_t count)

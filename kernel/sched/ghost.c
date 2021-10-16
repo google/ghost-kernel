@@ -28,6 +28,7 @@
 
 #include "sched.h"
 
+#define __INCLUDE_KERNEL_SCHED_GHOST
 #include "ghost_uapi.h"
 #include "ghost.h"
 

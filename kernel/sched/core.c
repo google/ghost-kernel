@@ -10,7 +10,6 @@
 #include <trace/events/sched.h>
 #undef CREATE_TRACE_POINTS
 
-#include "ghost.h"
 #include "sched.h"
 
 #include <linux/nospec.h>

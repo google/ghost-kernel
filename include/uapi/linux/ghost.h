@@ -11,8 +11,8 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _SCHED_GHOST_H_
-#define _SCHED_GHOST_H_
+#ifndef _UAPI_LINUX_GHOST_H_
+#define _UAPI_LINUX_GHOST_H_
 
 #include <linux/ioctl.h>
 
@@ -614,4 +614,4 @@ enum {
 
 // NOLINTEND
 
-#endif	/* _SCHED_GHOST_H_ */
+#endif	/* _UAPI_LINUX_GHOST_H_ */
