@@ -149,7 +149,6 @@ struct ghost_sw_region {
 	struct ghost_enclave *enclave;
 };
 
-#define GHOST_MAX_SW_REGIONS	64
 #define GHOST_CPU_DATA_REGION_SIZE \
 	(sizeof(struct ghost_cpu_data) * num_possible_cpus())
 
@@ -177,7 +176,6 @@ struct ghost_enclave {
 	spinlock_t lock;
 	struct kref kref;
 	struct list_head sw_region_list;
-	ulong sw_region_ids[BITS_TO_LONGS(GHOST_MAX_SW_REGIONS)];
 
 	struct ghost_cpu_data **cpu_data;
 	struct cpumask cpus;
