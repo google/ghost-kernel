@@ -5092,19 +5092,6 @@ int ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags, int cpu)
 				   /*check_caller_enclave=*/ false);
 }
 
-/*
- * Attempts to run gtid on cpu.  Returns 0 or -error.
- *
- * Like ghost_run_gtid_on, but checks that the calling CPU and the target cpu
- * are in the same enclave.
- */
-int ghost_run_gtid_on_check(gtid_t gtid, u32 task_barrier, int run_flags,
-			    int cpu)
-{
-	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
-				   /*check_caller_enclave=*/ true);
-}
-
 static inline bool _ghost_txn_ready(int cpu, int *commit_flags)
 {
 	struct ghost_txn *txn;

@@ -271,8 +271,6 @@ extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
 extern int ghost_run_gtid_on(s64 gtid, u32 task_barrier, int run_flags,
 			     int cpu);
-extern int ghost_run_gtid_on_check(s64 gtid, u32 task_barrier, int run_flags,
-				   int cpu);
 extern void ghost_cpu_idle(void);
 
 struct rq_flags;
