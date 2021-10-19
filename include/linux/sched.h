@@ -8,7 +8,6 @@
  */
 
 #include <uapi/linux/sched.h>
-#include <uapi/linux/ghost.h>
 
 #include <asm/current.h>
 
