@@ -208,6 +208,34 @@ struct ghost_status_word {
 #define GHOST_SW_TASK_MSG_GATED (1U << 19)   /* all task msgs are gated until
 					      * status_word is freed by agent */
 
+#ifdef __KERNEL__
+static inline void ghost_sw_set_flag(struct ghost_status_word *sw,
+				     uint32_t flag)
+{
+	/* Pairs with an acquire load in StatusWord::sw_flags() in the agent */
+	smp_store_release(&sw->flags, sw->flags | flag);
+}
+
+static inline void ghost_sw_clear_flag(struct ghost_status_word *sw,
+				       uint32_t flag)
+{
+	/* Pairs with an acquire load in StatusWord::sw_flags() in the agent */
+	smp_store_release(&sw->flags, sw->flags & ~flag);
+}
+
+static inline void ghost_sw_set_time(struct ghost_status_word *sw,
+				     s64 time)
+{
+	/*
+	 * Do a relaxed store since userspace syncs with the release store to
+	 * `sw->flags` for setting the oncpu bit in `ghost_sw_set_flag`. We set
+	 * the time in this function before setting the oncpu bit, so we use
+	 * that release store as a barrier.
+	 */
+	WRITE_ONCE(sw->switch_time, time);
+}
+#endif	/* __KERNEL__ */
+
 /*
  * Queue APIs.
  */

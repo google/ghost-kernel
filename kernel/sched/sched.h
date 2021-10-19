@@ -314,27 +314,6 @@ static inline void sched_ghost_entity_init(struct task_struct *p)
 	INIT_LIST_HEAD(&p->ghost.task_list);
 }
 
-static inline void ghost_sw_set_flag(struct ghost_status_word *sw,
-				     uint32_t flag) {
-	smp_store_release(&sw->flags, sw->flags | flag);
-}
-
-static inline void ghost_sw_clear_flag(struct ghost_status_word *sw,
-				       uint32_t flag) {
-	smp_store_release(&sw->flags, sw->flags & ~flag);
-}
-
-static inline void ghost_sw_set_time(struct ghost_status_word *sw,
-				     s64 time) {
-	/*
-	 * Do a relaxed store since userspace syncs with the release store to
-         * `sw->flags` for setting the oncpu bit in `ghost_sw_set_flag`. We set
-         * the time in this function before setting the oncpu bit, so we use
-         * that release store as a barrier.
-	 */
-	WRITE_ONCE(sw->switch_time, time);
-}
-
 static inline int ghost_schedattr_to_enclave_fd(const struct sched_attr *attr)
 {
 	return attr->sched_runtime;
