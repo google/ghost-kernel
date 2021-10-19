@@ -13,6 +13,9 @@
 
 #include "sched.h"
 
+#include "ghost_uapi.h"
+#include "ghost.h"
+
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/sysfs.h>

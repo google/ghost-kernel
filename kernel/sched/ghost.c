@@ -24,12 +24,12 @@
 #include <asm/apic.h>
 #endif
 
-#include <uapi/linux/ghost.h>
-
 #include <trace/events/sched.h>
 
-#include "ghost.h"
 #include "sched.h"
+
+#include "ghost_uapi.h"
+#include "ghost.h"
 
 /* ghost tid */
 typedef int64_t gtid_t;
