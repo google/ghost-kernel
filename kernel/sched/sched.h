@@ -149,9 +149,6 @@ struct ghost_sw_region {
 	struct ghost_enclave *enclave;
 };
 
-#define GHOST_CPU_DATA_REGION_SIZE \
-	(sizeof(struct ghost_cpu_data) * num_possible_cpus())
-
 struct enclave_work {
 	struct list_head link;
 	unsigned int nr_decrefs;

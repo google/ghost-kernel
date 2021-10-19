@@ -918,6 +918,9 @@ static void runtime_adjust_dirtabs(void)
 {
 	struct gf_dirent *enc_txn;
 
+	const loff_t GHOST_CPU_DATA_REGION_SIZE =
+		sizeof(struct ghost_cpu_data) * num_possible_cpus();
+
 	enc_txn = gf_find_file(enclave_dirtab, "cpu_data");
 	if (WARN_ON(!enc_txn))
 		return;
