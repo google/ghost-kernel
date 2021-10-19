@@ -29,8 +29,7 @@
 #include <linux/time_namespace.h>
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-#include <linux/ghost.h>
-#include <linux/sched.h>
+#include <uapi/linux/ghost.h>
 #endif
 
 struct timerfd_ctx {
