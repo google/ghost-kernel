@@ -11,8 +11,10 @@
  * GNU General Public License for more details.
  */
 
-#include "sched.h"
 #include <linux/filter.h>
+
+#include "sched.h"
+#include "ghost_uapi.h"
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 
@@ -182,11 +184,13 @@ static void ghost_sched_pnt_detach(struct ghost_enclave *e,
 static const struct bpf_func_proto *
 ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	int eat = prog->expected_attach_type & 0xFFFF;
+
 	switch (func_id) {
 	case BPF_FUNC_ghost_wake_agent:
 		return &bpf_ghost_wake_agent_proto;
 	case BPF_FUNC_ghost_run_gtid:
-		switch (prog->expected_attach_type) {
+		switch (eat) {
 		case BPF_GHOST_SCHED_PNT:
 			return &bpf_ghost_run_gtid_proto;
 		default:
@@ -371,6 +375,11 @@ static const struct bpf_link_ops bpf_ghost_link_ops = {
 	.dealloc = bpf_ghost_link_dealloc,
 };
 
+static inline uint enclave_abi(struct ghost_enclave *e)
+{
+	return GHOST_VERSION;	/* for now all enclaves have the same abi */
+}
+
 int ghost_bpf_link_attach(const union bpf_attr *attr,
 			  struct bpf_prog *prog)
 {
@@ -379,13 +388,18 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 	enum bpf_attach_type ea_type;
 	struct ghost_enclave *e;
 	struct fd f_enc = {0};
-	int err;
+	int err, ea_abi;
+
+	BUILD_BUG_ON(GHOST_VERSION > 0xFFFF);
 
 	if (attr->link_create.flags)
 		return -EINVAL;
 	if (prog->expected_attach_type != attr->link_create.attach_type)
 		return -EINVAL;
-	ea_type = prog->expected_attach_type;
+
+	// Mask the ABI value encoded in the upper 16 bits.
+	ea_type = prog->expected_attach_type & 0xFFFF;
+	ea_abi = (u32)prog->expected_attach_type >> 16;
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
@@ -424,12 +438,13 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 	}
 
 	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
-	if (!e) {
+	if (!e || ea_abi != enclave_abi(e)) {
 		ghost_fdput_enclave(e, &f_enc);
 		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
 		bpf_link_cleanup(&link_primer);
 		return -EBADF;
 	}
+
 	/*
 	 * On success, sc_link will hold a kref on the enclave, which will get
 	 * put when the link's FD is closed (and thus bpf_link_put ->

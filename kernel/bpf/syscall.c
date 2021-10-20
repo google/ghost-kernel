@@ -1928,6 +1928,11 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 			   struct btf *attach_btf, u32 btf_id,
 			   struct bpf_prog *dst_prog)
 {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	BUILD_BUG_ON(__MAX_BPF_ATTACH_TYPE > 0xFFFF);
+	expected_attach_type &= 0xFFFF;
+#endif
+
 	if (btf_id) {
 		if (btf_id > BTF_MAX_TYPE)
 			return -EINVAL;
@@ -2921,6 +2926,11 @@ static int bpf_prog_attach_check_attach_type(const struct bpf_prog *prog,
 static enum bpf_prog_type
 attach_type_to_prog_type(enum bpf_attach_type attach_type)
 {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	BUILD_BUG_ON(__MAX_BPF_ATTACH_TYPE > 0xFFFF);
+	attach_type &= 0xFFFF;
+#endif
+
 	switch (attach_type) {
 	case BPF_CGROUP_INET_INGRESS:
 	case BPF_CGROUP_INET_EGRESS:
