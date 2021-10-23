@@ -12,6 +12,9 @@ performant framework for delegation of thread scheduling policy to userspace
 processes that enables policy optimization, non-disruptive upgrades, and fault
 isolation.
 
+[SOSP '21 Paper](https://dl.acm.org/doi/10.1145/3477132.3483542)\
+[SOSP '21 Talk](https://youtu.be/j4ABe4dsbIY)
+
 You must compile and install this kernel in order to use the [ghOSt userspace
 component](https://www.github.com/google/ghost-userspace).
 
