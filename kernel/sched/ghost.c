@@ -7167,7 +7167,7 @@ static void runtime_adjust_dirtabs(void)
 static int __init abi_init(ghost_abi_ptr_t abi)
 {
 	if (WARN_ON_ONCE(abi->version != GHOST_VERSION))
-		return -1;
+		return -EINVAL;
 
 	runtime_adjust_dirtabs();
 	return 0;

@@ -1,7 +1,6 @@
 #include <linux/kernfs.h>
 
 #include "sched.h"
-#include "ghost_uapi.h"
 
 static struct kernfs_root *ghost_kfs_root;
 
@@ -89,14 +88,15 @@ static ssize_t gf_top_ctl_write(struct kernfs_open_file *of, char *buf,
 	struct kernfs_node *ctl = of->kn;
 	struct kernfs_node *top_dir = ctl->parent;
 	unsigned long x;
+	unsigned int abi_num;
 	int ret;
 
 	gf_strip_slash_n(buf, len);
 
 	/* This will ignore any extra digits or characters beyond the %u. */
-	ret = sscanf(buf, "create %lu", &x);
-	if (ret == 1) {
-		ret = make_enclave(top_dir, x, GHOST_VERSION);
+	ret = sscanf(buf, "create %lu %u", &x, &abi_num);
+	if (ret == 2) {
+		ret = make_enclave(top_dir, x, abi_num);
 		return ret ? ret : len;
 	}
 
@@ -109,10 +109,11 @@ static struct kernfs_ops gf_ops_top_ctl = {
 
 static int gf_top_version_show(struct seq_file *sf, void *v)
 {
-	/* For now we only advertise a single abi from the kernel */
-	WARN_ON_ONCE(first_ghost_abi != last_ghost_abi);
+	ghost_abi_ptr_t abi;
 
-	seq_printf(sf, "%u", first_ghost_abi->version);
+	for_each_abi(abi)
+		seq_printf(sf, "%u\n", abi->version);
+
 	return 0;
 }
 
