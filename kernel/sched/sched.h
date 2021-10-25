@@ -2247,6 +2247,8 @@ int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
 void ghost_publish_cpu(struct ghost_enclave *e, int cpu);
 void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
 void ghost_return_cpu(struct ghost_enclave *e, int cpu);
+
+int64_t ghost_sync_group_cookie(void);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

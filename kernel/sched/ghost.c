@@ -38,24 +38,11 @@ typedef int64_t gtid_t;
 /* The ghost_txn pointer equals NULL or &enclave->cpu_data[this_cpu].txn */
 static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
 
-static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 /*
  * Use per-cpu memory instead of stack memory to avoid memsetting.  We only
  * send one message at a time per cpu.
  */
 static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
-
-/*
- * We do not want to make 'SG_COOKIE_CPU_BITS' larger than necessary so that
- * we can maximize the number of times a sequence counter can increment before
- * overflowing.
- */
-#if (CONFIG_NR_CPUS < 2048)
-#define SG_COOKIE_CPU_BITS	11
-#else
-#define SG_COOKIE_CPU_BITS	14
-#endif
-#define SG_COOKIE_CPU_SHIFT	(63 - SG_COOKIE_CPU_BITS)	/* MSB=0 */
 
 struct ghost_sw_region {
 	struct list_head list;			/* ghost_enclave glue */
@@ -2131,14 +2118,6 @@ out_e:
 	free_cpumask_var(del);
 
 	return ret;
-}
-
-void __init init_sched_ghost_class(void)
-{
-	int64_t cpu;
-
-	for_each_possible_cpu(cpu)
-		per_cpu(sync_group_cookie, cpu) = cpu << SG_COOKIE_CPU_SHIFT;
 }
 
 /*
@@ -5709,24 +5688,6 @@ static void ghost_reached_rendezvous(int cpu, int64_t target)
 
 	rq = cpu_rq(cpu);
 	smp_store_release(&rq->ghost.rendezvous, target);
-}
-
-/*
- * A sync-group cookie uniquely identifies a sync-group commit.
- *
- * It is useful to identify the initiator and participants of the sync-group.
- */
-static inline int64_t ghost_sync_group_cookie(void)
-{
-	int64_t val;
-
-	WARN_ON_ONCE(preemptible());
-	BUILD_BUG_ON(NR_CPUS > (1U << SG_COOKIE_CPU_BITS));
-
-	val = __this_cpu_inc_return(sync_group_cookie);
-	VM_BUG_ON((val <= 0) || (val & GHOST_POISONED_RENDEZVOUS));
-
-	return val;
 }
 
 static int ghost_sync_group(struct ghost_enclave *e,

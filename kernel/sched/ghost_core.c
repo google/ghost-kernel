@@ -14,6 +14,20 @@ extern const struct ghost_abi __end_ghost_abi[];
 #define for_each_abi(abi) \
 	for (abi = first_ghost_abi; abi <= last_ghost_abi; abi++)
 
+/*
+ * We do not want to make 'SG_COOKIE_CPU_BITS' larger than necessary so that
+ * we can maximize the number of times a sequence counter can increment before
+ * overflowing.
+ */
+#if (CONFIG_NR_CPUS < 2048)
+#define SG_COOKIE_CPU_BITS	11
+#else
+#define SG_COOKIE_CPU_BITS	14
+#endif
+#define SG_COOKIE_CPU_SHIFT	(63 - SG_COOKIE_CPU_BITS)    /* MSB=0 */
+
+static DEFINE_PER_CPU(int64_t, sync_group_cookie);
+
 struct gf_dirent {
 	char			*name;
 	umode_t			mode;
@@ -366,4 +380,30 @@ void ghost_return_cpu(struct ghost_enclave *e, int cpu)
 	WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
 	per_cpu(cpu_owner, cpu) = NULL;
 	spin_unlock(&cpu_rsvp);
+}
+
+/*
+ * A sync-group cookie uniquely identifies a sync-group commit.
+ *
+ * It is useful to identify the initiator and participants of the sync-group.
+ */
+int64_t ghost_sync_group_cookie(void)
+{
+	int64_t val;
+
+	WARN_ON_ONCE(preemptible());
+	BUILD_BUG_ON(NR_CPUS > (1U << SG_COOKIE_CPU_BITS));
+
+	val = __this_cpu_inc_return(sync_group_cookie);
+	VM_BUG_ON((val <= 0) || (val & GHOST_POISONED_RENDEZVOUS));
+
+	return val;
+}
+
+void __init init_sched_ghost_class(void)
+{
+	int64_t cpu;
+
+	for_each_possible_cpu(cpu)
+		per_cpu(sync_group_cookie, cpu) = cpu << SG_COOKIE_CPU_SHIFT;
 }
