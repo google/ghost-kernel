@@ -35,13 +35,8 @@
 /* ghost tid */
 typedef int64_t gtid_t;
 
-/* Lock ordering is enclave -> cpu_rsvp */
-static DEFINE_SPINLOCK(cpu_rsvp);
-static struct cpumask cpus_in_enclave;	/* protected by cpu_rsvp lock */
-
 /* The ghost_txn pointer equals NULL or &enclave->cpu_data[this_cpu].txn */
 static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
-static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
 static DEFINE_PER_CPU(int64_t, sync_group_cookie);
 /*
@@ -1777,15 +1772,15 @@ static inline void queue_incref(struct ghost_queue *q)
 	kref_get(&q->kref);
 }
 
-/* Hold e->lock and the cpu_rsvp lock */
+/*
+ * Caller must hold e->lock and 'cpu' must have already been claimed
+ * on behalf of the enclave via ghost_claim_cpus().
+ */
 static void __enclave_add_cpu(struct ghost_enclave *e, int cpu)
 {
 	struct ghost_txn *txn;
 
 	VM_BUG_ON(!spin_is_locked(&e->lock));
-	VM_BUG_ON(!spin_is_locked(&cpu_rsvp));
-
-	VM_BUG_ON(cpumask_test_cpu(cpu, &cpus_in_enclave));
 	VM_BUG_ON(cpumask_test_cpu(cpu, &e->cpus));
 
 	txn = &e->cpu_data[cpu]->txn;
@@ -1800,10 +1795,14 @@ static void __enclave_add_cpu(struct ghost_enclave *e, int cpu)
 	txn->u.sync_group_owner = -1;
 	txn->state = GHOST_TXN_COMPLETE;
 
-	cpumask_set_cpu(cpu, &cpus_in_enclave);
 	cpumask_set_cpu(cpu, &e->cpus);
-	rcu_assign_pointer(per_cpu(enclave, cpu), e);
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), txn);
+
+	/*
+	 * We have already claimed 'cpu' for this enclave so now publish
+	 * it to the rest of the kernel via the per_cpu(enclave) pointer.
+	 */
+	ghost_publish_cpu(e, cpu);
 }
 
 /* Hold e->lock.  Caller must synchronize_rcu(). */
@@ -1811,30 +1810,27 @@ static void __enclave_unpublish_cpu(struct ghost_enclave *e, int cpu)
 {
 	VM_BUG_ON(!spin_is_locked(&e->lock));
 
-	rcu_assign_pointer(per_cpu(enclave, cpu), NULL);
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), NULL);
+	ghost_unpublish_cpu(e, cpu);
 }
 
-/* Hold e->lock and the cpu_rsvp lock. */
+/* Caller must hold e->lock */
 static void __enclave_return_cpu(struct ghost_enclave *e, int cpu)
 {
 	VM_BUG_ON(!spin_is_locked(&e->lock));
-	VM_BUG_ON(!spin_is_locked(&cpu_rsvp));
-
-	VM_BUG_ON(!cpumask_test_cpu(cpu, &cpus_in_enclave));
 	VM_BUG_ON(!cpumask_test_cpu(cpu, &e->cpus));
 
-	cpumask_clear_cpu(cpu, &cpus_in_enclave);
 	cpumask_clear_cpu(cpu, &e->cpus);
+	ghost_return_cpu(e, cpu);
 }
 
-/* Hold e->lock and the cpu_rsvp lock.  Caller must synchronize_rcu(). */
+/* Caller must hold e->lock and synchronize_rcu() on return */
 static void __enclave_remove_cpu(struct ghost_enclave *e, int cpu)
 {
 	__enclave_unpublish_cpu(e, cpu);
-	/* cpu no longer belongs to any enclave */
+	/* cpu is no longer participating in ghost scheduling */
 	__enclave_return_cpu(e, cpu);
-	/* cpu can no be assigned to another enclave */
+	/* cpu can now be assigned to another enclave */
 }
 
 /*
@@ -2013,9 +2009,7 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 		struct task_struct *agent;
 
 		if (!rq->ghost.agent) {
-			spin_lock(&cpu_rsvp);
 			__enclave_remove_cpu(e, cpu);
-			spin_unlock(&cpu_rsvp);
 			continue;
 		}
 		__enclave_unpublish_cpu(e, cpu);
@@ -2112,26 +2106,22 @@ static int ghost_enclave_set_cpus(struct ghost_enclave *e,
 		}
 	}
 
-	spin_lock(&cpu_rsvp);
-
-	if (cpumask_intersects(add, &cpus_in_enclave)) {
-		ret = -EBUSY;
-		goto out_rsvp;
-	}
 	for_each_cpu(cpu, add) {
 		if (!cpu_online(cpu)) {
 			ret = -ENODEV;
-			goto out_rsvp;
+			goto out_e;
 		}
 	}
+
+	ret = ghost_claim_cpus(e, add);
+	if (ret)
+		goto out_e;
 
 	for_each_cpu(cpu, add)
 		__enclave_add_cpu(e, cpu);
 	for_each_cpu(cpu, del)
 		__enclave_remove_cpu(e, cpu);
 
-out_rsvp:
-	spin_unlock(&cpu_rsvp);
 out_e:
 	spin_unlock_irqrestore(&e->lock, flags);
 
@@ -4397,9 +4387,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		/* See ghost_destroy_enclave() */
 		if (rq->ghost.agent_remove_enclave_cpu) {
 			rq->ghost.agent_remove_enclave_cpu = false;
-			spin_lock(&cpu_rsvp);
 			__enclave_return_cpu(e, rq->cpu);
-			spin_unlock(&cpu_rsvp);
 		}
 	}
 

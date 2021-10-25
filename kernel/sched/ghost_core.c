@@ -1,5 +1,6 @@
 #include <linux/kernfs.h>
 
+#define _GHOST_MAYBE_CONST
 #include "sched.h"
 
 static struct kernfs_root *ghost_kfs_root;
@@ -292,3 +293,77 @@ static void __exit ghostfs_exit(void)
 
 late_initcall(ghostfs_init);
 __exitcall(ghostfs_exit);
+
+/* per_cpu(cpu_owner) protected by 'cpu_rsvp' */
+static DEFINE_SPINLOCK(cpu_rsvp);
+static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, cpu_owner);
+
+DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
+
+int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
+{
+	int cpu;
+
+	/*
+	 * 'e->lock' must be held across ghost_claim_cpus() and the
+	 * corresponding ghost_publish_cpu().
+	 */
+	VM_BUG_ON(!spin_is_locked(&e->lock));
+
+	spin_lock(&cpu_rsvp);
+
+	for_each_cpu(cpu, new_cpus) {
+		/*
+		 * Let's make sure that 'cpu' hasn't been already claimed by
+		 * another enclave.
+		 */
+		if (per_cpu(cpu_owner, cpu)) {
+			spin_unlock(&cpu_rsvp);
+			return -EBUSY;
+		}
+		WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
+	}
+
+	for_each_cpu(cpu, new_cpus)
+		per_cpu(cpu_owner, cpu) = e;
+
+	spin_unlock(&cpu_rsvp);
+	return 0;
+}
+
+void ghost_publish_cpu(struct ghost_enclave *e, int cpu)
+{
+	VM_BUG_ON(!spin_is_locked(&e->lock));
+
+	spin_lock(&cpu_rsvp);
+	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
+	WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
+	rcu_assign_pointer(per_cpu(enclave, cpu), e);
+	spin_unlock(&cpu_rsvp);
+}
+
+void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu)
+{
+	/*
+	 * 'e->lock' must be held across ghost_unpublish_cpu() and the
+	 * corresponding ghost_return_cpu().
+	 */
+	VM_BUG_ON(!spin_is_locked(&e->lock));
+
+	spin_lock(&cpu_rsvp);
+	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
+	WARN_ON_ONCE(per_cpu(enclave, cpu) != e);
+	rcu_assign_pointer(per_cpu(enclave, cpu), NULL);
+	spin_unlock(&cpu_rsvp);
+}
+
+void ghost_return_cpu(struct ghost_enclave *e, int cpu)
+{
+	VM_BUG_ON(!spin_is_locked(&e->lock));
+
+	spin_lock(&cpu_rsvp);
+	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
+	WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
+	per_cpu(cpu_owner, cpu) = NULL;
+	spin_unlock(&cpu_rsvp);
+}

@@ -2232,6 +2232,21 @@ const static struct ghost_abi __##name##_ghost_abi	\
 	__aligned(__alignof__(struct ghost_abi))	\
 	__used __section(".rodata.ghost_abi")
 
+/*
+ * We want variables like 'per_cpu(enclave, cpu)' to be immutable in an
+ * ABI implementation file but mutable in the ABI independent code. The
+ * _GHOST_MAYBE_CONST macro is an easy way to enforce it at compile time.
+ */
+#ifndef _GHOST_MAYBE_CONST
+#define _GHOST_MAYBE_CONST	const
+#endif
+
+_GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
+
+int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
+void ghost_publish_cpu(struct ghost_enclave *e, int cpu);
+void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
+void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)
