@@ -62,6 +62,14 @@ static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
 #endif
 #define SG_COOKIE_CPU_SHIFT	(63 - SG_COOKIE_CPU_BITS)	/* MSB=0 */
 
+struct ghost_sw_region {
+	struct list_head list;			/* ghost_enclave glue */
+	uint32_t alloc_scan_start;		/* allocator starts scan here */
+	struct ghost_sw_region_header *header;  /* pointer to vmalloc memory */
+	size_t mmap_sz;				/* size of mmapped region */
+	struct ghost_enclave *enclave;
+};
+
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
 
@@ -102,6 +110,10 @@ static void __enclave_remove_task(struct ghost_enclave *e,
 				  struct task_struct *p);
 static int __sw_region_free(struct ghost_sw_region *region);
 static const struct file_operations queue_fops;
+
+static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f);
+static void ghostfs_put_enclave_ctl(struct file *f);
+static void ghost_destroy_enclave(struct ghost_enclave *e);
 
 /* True if X and Y have the same enclave, including having no enclave. */
 static bool check_same_enclave(int cpu_x, int cpu_y)
@@ -1642,8 +1654,8 @@ int _ghost_mmap_common(struct vm_area_struct *vma, ulong mapsize)
  *
  * 'addr' must have been obtained from vmalloc_user().
  */
-int ghost_region_mmap(struct file *file, struct vm_area_struct *vma,
-		      void *addr, ulong mapsize)
+static int ghost_region_mmap(struct file *file, struct vm_area_struct *vma,
+			     void *addr, ulong mapsize)
 {
 	int error;
 
@@ -1654,8 +1666,8 @@ int ghost_region_mmap(struct file *file, struct vm_area_struct *vma,
 	return error;
 }
 
-int ghost_cpu_data_mmap(struct file *file, struct vm_area_struct *vma,
-			struct ghost_cpu_data **cpu_data, ulong mapsize)
+static int ghost_cpu_data_mmap(struct file *file, struct vm_area_struct *vma,
+			       struct ghost_cpu_data **cpu_data, ulong mapsize)
 {
 	int error;
 	unsigned long uaddr;
@@ -1937,7 +1949,7 @@ static void enclave_destroyer(struct work_struct *work)
 	kref_put(&e->kref, enclave_release);
 }
 
-struct ghost_enclave *ghost_create_enclave(void)
+static struct ghost_enclave *ghost_create_enclave(void)
 {
 	struct ghost_enclave *e = kzalloc(sizeof(*e), GFP_KERNEL);
 	bool vmalloc_failed = false;
@@ -2102,7 +2114,7 @@ void ghost_destroy_enclave(struct ghost_enclave *e)
 	 * still be open FDs, each of which holds a reference.  When the last FD
 	 * is closed, we'll release and free.
 	 */
-	ghostfs_remove_enclave(e);
+	kernfs_remove(e->enclave_dir);
 
 	kref_put(&e->kref, enclave_release);
 }
@@ -2112,7 +2124,8 @@ void ghost_destroy_enclave(struct ghost_enclave *e)
  * Returns an error code on failure and does not change the enclave.  Will fail
  * if a cpu is in another enclave.
  */
-int ghost_enclave_set_cpus(struct ghost_enclave *e, const struct cpumask *cpus)
+static int ghost_enclave_set_cpus(struct ghost_enclave *e,
+				  const struct cpumask *cpus)
 {
 	unsigned long flags;
 	unsigned int cpu;
@@ -2727,9 +2740,9 @@ static size_t calculate_sw_region_size(void)
  *
  * Returns an ERR_PTR on error.
  */
-struct ghost_sw_region *ghost_create_sw_region(struct ghost_enclave *e,
-					       unsigned int id,
-					       unsigned int node)
+static struct ghost_sw_region *ghost_create_sw_region(struct ghost_enclave *e,
+						      unsigned int id,
+						      unsigned int node)
 {
 	struct ghost_sw_region *swr;
 	struct ghost_sw_region_header *h;
@@ -3095,8 +3108,8 @@ static const struct file_operations queue_fops = {
 	.mmap			= queue_mmap,
 };
 
-int ghost_create_queue(struct ghost_enclave *e,
-		       struct ghost_ioc_create_queue __user *arg)
+static int ghost_create_queue(struct ghost_enclave *e,
+			      struct ghost_ioc_create_queue __user *arg)
 {
 	ulong size;
 	int error = 0, fd, elems, node, flags;
@@ -3289,8 +3302,8 @@ static int _get_sw_info(struct ghost_enclave *e,
 	return error;
 }
 
-int ghost_sw_get_info(struct ghost_enclave *e,
-		      struct ghost_ioc_sw_get_info __user *arg)
+static int ghost_sw_get_info(struct ghost_enclave *e,
+			     struct ghost_ioc_sw_get_info __user *arg)
 {
 	int error = -EINVAL;
 	struct task_struct *p;
@@ -3342,7 +3355,8 @@ done:
 	return error;
 }
 
-int ghost_sw_free(struct ghost_enclave *e, struct ghost_sw_info __user *uinfo)
+static int ghost_sw_free(struct ghost_enclave *e,
+			 struct ghost_sw_info __user *uinfo)
 {
 	int error;
 	bool gated;
@@ -3381,7 +3395,7 @@ done:
 	return error;
 }
 
-int ghost_associate_queue(struct ghost_ioc_assoc_queue __user *arg)
+static int ghost_associate_queue(struct ghost_ioc_assoc_queue __user *arg)
 {
 	int error = 0;
 	struct rq *rq;
@@ -3501,8 +3515,8 @@ done:
 	return error;
 }
 
-int ghost_set_default_queue(struct ghost_enclave *e,
-			    struct ghost_ioc_set_default_queue __user *arg)
+static int ghost_set_default_queue(struct ghost_enclave *e,
+			   struct ghost_ioc_set_default_queue __user *arg)
 {
 	int error = 0;
 	struct fd f_que = {0};
@@ -3609,7 +3623,8 @@ static int agent_target_cpu(struct rq *rq)
 	return target_cpu(agent->ghost.dst_q, task_cpu(agent));
 }
 
-int ghost_config_queue_wakeup(struct ghost_ioc_config_queue_wakeup __user *arg)
+static int ghost_config_queue_wakeup(
+		struct ghost_ioc_config_queue_wakeup __user *arg)
 {
 	struct ghost_queue *q;
 	struct queue_notifier *old, *qn = NULL;
@@ -3691,7 +3706,7 @@ out_fput:
 	return ret;
 }
 
-int ghost_get_cpu_time(struct ghost_ioc_get_cpu_time __user *arg)
+static int ghost_get_cpu_time(struct ghost_ioc_get_cpu_time __user *arg)
 {
 	struct task_struct *p;
 	u64 time;
@@ -5774,8 +5789,8 @@ static inline int64_t ghost_sync_group_cookie(void)
 	return val;
 }
 
-int ghost_sync_group(struct ghost_enclave *e,
-			  struct ghost_ioc_commit_txn __user *arg)
+static int ghost_sync_group(struct ghost_enclave *e,
+			    struct ghost_ioc_commit_txn __user *arg)
 {
 	int64_t target;
 	bool failed = false;
@@ -5985,8 +6000,8 @@ int ghost_sync_group(struct ghost_enclave *e,
 	return !failed;
 }
 
-int ioctl_ghost_commit_txn(struct ghost_enclave *e,
-			  struct ghost_ioc_commit_txn __user *arg)
+static int ioctl_ghost_commit_txn(struct ghost_enclave *e,
+				  struct ghost_ioc_commit_txn __user *arg)
 {
 	int error, state;
 	int cpu, this_cpu;
@@ -6156,7 +6171,7 @@ static int ghost_timerfd_validate(struct timerfd_ghost *timerfd_ghost)
 int do_timerfd_settime(int ufd, int flags, const struct itimerspec64 *new,
 		       struct itimerspec64 *old, struct timerfd_ghost *tfdl);
 
-int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
+static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 {
 	struct itimerspec64 new, old;
 	int ret;
@@ -6716,12 +6731,6 @@ static int gf_ctl_show(struct seq_file *sf, void *v)
 	return 0;
 }
 
-/* Called from the scheduler when it destroys the enclave. */
-void ghostfs_remove_enclave(struct ghost_enclave *e)
-{
-	kernfs_remove(e->enclave_dir);
-}
-
 static void destroy_enclave(struct kernfs_open_file *ctl_of)
 {
 	struct kernfs_node *ctl = ctl_of->kn;
@@ -6918,7 +6927,7 @@ static struct kernfs_ops gf_ops_e_ctl = {
  * need to do it manually here, because this is is a "backdoor" function to get
  * the enclave pointer.  That pointer is kept alive by kernfs.
  */
-struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
+static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
 {
 	struct kernfs_node *kn;
 
@@ -6936,7 +6945,7 @@ struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
 }
 
 /* Pair this with a successful ghostfs_ctl_to_enclave call. */
-void ghostfs_put_enclave_ctl(struct file *f)
+static void ghostfs_put_enclave_ctl(struct file *f)
 {
 	struct kernfs_node *kn;
 
