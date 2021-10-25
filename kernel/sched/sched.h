@@ -2214,6 +2214,20 @@ static inline bool skip_fair_idle_balance(struct cfs_rq *cfs_rq,
 		return false;
 }
 
+typedef const struct ghost_abi *ghost_abi_ptr_t;
+struct ghost_abi {
+	int version;
+	int (*abi_init)(ghost_abi_ptr_t abi);
+	struct ghost_enclave *
+		(*create_enclave)(ghost_abi_ptr_t abi,
+				  struct kernfs_node *dir, ulong id);
+};
+
+#define DEFINE_GHOST_ABI(name) \
+const static struct ghost_abi __##name##_ghost_abi	\
+	__aligned(__alignof__(struct ghost_abi))	\
+	__used __section(".rodata.ghost_abi")
+
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

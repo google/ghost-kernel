@@ -423,6 +423,16 @@
 	__end_ro_after_init = .;
 #endif
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+#define	GHOST_ABI_RODATA		\
+	STRUCT_ALIGN();			\
+	__begin_ghost_abi = .;		\
+	*(.rodata.ghost_abi)		\
+	__end_ghost_abi = .;
+#else
+#define	GHOST_ABI_RODATA
+#endif
+
 /*
  * Read only Data
  */
@@ -430,6 +440,7 @@
 	. = ALIGN((align));						\
 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
 		__start_rodata = .;					\
+		GHOST_ABI_RODATA					\
 		*(.rodata) *(.rodata.*)					\
 		SCHED_DATA						\
 		RO_AFTER_INIT_DATA	/* Read only after init */	\

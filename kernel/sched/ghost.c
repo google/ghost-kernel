@@ -1949,61 +1949,13 @@ static void enclave_destroyer(struct work_struct *work)
 	kref_put(&e->kref, enclave_release);
 }
 
-static struct ghost_enclave *ghost_create_enclave(void)
-{
-	struct ghost_enclave *e = kzalloc(sizeof(*e), GFP_KERNEL);
-	bool vmalloc_failed = false;
-	int cpu;
-
-	BUILD_BUG_ON(sizeof(struct ghost_cpu_data) != PAGE_SIZE);
-
-	if (!e)
-		return NULL;
-	spin_lock_init(&e->lock);
-	kref_init(&e->kref);
-	INIT_LIST_HEAD(&e->sw_region_list);
-	INIT_LIST_HEAD(&e->task_list);
-	INIT_LIST_HEAD(&e->inhibited_task_list);
-	INIT_LIST_HEAD(&e->ew.link);
-	INIT_WORK(&e->task_reaper, enclave_reap_tasks);
-	INIT_WORK(&e->enclave_actual_release, enclave_actual_release);
-	INIT_WORK(&e->enclave_destroyer, enclave_destroyer);
-
-	e->cpu_data = kcalloc(num_possible_cpus(),
-			      sizeof(struct ghost_cpu_data *), GFP_KERNEL);
-	if (!e->cpu_data) {
-		kfree(e);
-		return NULL;
-	}
-
-	for_each_possible_cpu(cpu) {
-		e->cpu_data[cpu] = vmalloc_user_node_flags(PAGE_SIZE,
-							   cpu_to_node(cpu),
-							   GFP_KERNEL);
-		if (e->cpu_data[cpu] == NULL) {
-			vmalloc_failed = true;
-			break;
-		}
-	}
-
-	if (vmalloc_failed) {
-		for_each_possible_cpu(cpu)
-			vfree(e->cpu_data[cpu]);
-		kfree(e->cpu_data);
-		kfree(e);
-		return NULL;
-	}
-
-	return e;
-}
-
 /*
  * Here we can trigger any destruction we want, such as killing agents, kicking
  * tasks to CFS, etc.  Undo things that were done at runtime.
  *
  * The enclave itself isn't freed until enclave_release().
  */
-void ghost_destroy_enclave(struct ghost_enclave *e)
+static void ghost_destroy_enclave(struct ghost_enclave *e)
 {
 	ulong flags;
 	int cpu;
@@ -6425,8 +6377,6 @@ static void strip_slash_n(char *buf, size_t count)
 		*n = '\0';
 }
 
-static struct kernfs_root *ghost_kfs_root;
-
 struct gf_dirent {
 	char			*name;
 	umode_t			mode;
@@ -7104,6 +7054,7 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	nr_tasks = e->nr_tasks;
 	spin_unlock_irqrestore(&e->lock, fl);
 
+	seq_printf(sf, "version %u\n", GHOST_VERSION);
 	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
 	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
 	return 0;
@@ -7195,103 +7146,6 @@ static int gf_add_files(struct kernfs_node *parent, struct gf_dirent *dirtab,
 	return 0;
 }
 
-static int make_enclave(struct kernfs_node *parent, unsigned long id)
-{
-	struct kernfs_node *dir;
-	struct ghost_enclave *e;
-	char name[31];
-	int ret;
-
-	/*
-	 * ghost_create_enclave() is mostly just "alloc and initialize".
-	 * Anything done by it gets undone in enclave_release, and it is not
-	 * discoverable, usable, or otherwise hooked into the kernel until
-	 * kernfs_active().
-	 */
-	e = ghost_create_enclave();
-	if (!e)
-		return -ENOMEM;
-	e->id = id;
-	if (snprintf(name, sizeof(name), "enclave_%lu", id) >= sizeof(name)) {
-		ret = -ENOSPC;
-		goto out_e;
-	}
-
-	dir = kernfs_create_dir(parent, name, 0555, NULL);
-	if (IS_ERR(dir)) {
-		ret = PTR_ERR(dir);
-		goto out_e;
-	}
-	e->enclave_dir = dir;
-
-	ret = gf_add_files(dir, enclave_dirtab, e);
-	if (ret)
-		goto out_dir;
-
-	/*
-	 * Once the enclave has been activated, it is available to userspace and
-	 * can be used for scheduling.  After that, we must destroy it by
-	 * calling ghost_destroy_enclave(), not by releasing the reference.
-	 */
-	kernfs_activate(dir);	/* recursive */
-
-	return 0;
-
-out_dir:
-	kernfs_remove(dir);	/* recursive */
-out_e:
-	kref_put(&e->kref, enclave_release);
-	return ret;
-}
-
-static ssize_t gf_top_ctl_write(struct kernfs_open_file *of, char *buf,
-				size_t len, loff_t off)
-{
-	struct kernfs_node *ctl = of->kn;
-	struct kernfs_node *top_dir = ctl->parent;
-	unsigned long x;
-	int ret;
-
-	strip_slash_n(buf, len);
-
-	/* This will ignore any extra digits or characters beyond the %u. */
-	ret = sscanf(buf, "create %lu", &x);
-	if (ret == 1) {
-		ret = make_enclave(top_dir, x);
-		return ret ? ret : len;
-	}
-
-	return -EINVAL;
-}
-
-static struct kernfs_ops gf_ops_top_ctl = {
-	.write			= gf_top_ctl_write,
-};
-
-static int gf_top_version_show(struct seq_file *sf, void *v)
-{
-	seq_printf(sf, "%u", GHOST_VERSION);
-	return 0;
-}
-
-static struct kernfs_ops gf_ops_top_version = {
-	.seq_show		= gf_top_version_show,
-};
-
-static struct gf_dirent top_dirtab[] = {
-	{
-		.name		= "ctl",
-		.mode		= 0660,
-		.ops		= &gf_ops_top_ctl,
-	},
-	{
-		.name		= "version",
-		.mode		= 0444,
-		.ops		= &gf_ops_top_version,
-	},
-	{0}
-};
-
 /*
  * Most gf_dirent file sizes are not known at compile time.  Most don't matter
  * for sysfs and we can leave them as 0.  But for anything that gets mmapped,
@@ -7310,120 +7164,82 @@ static void runtime_adjust_dirtabs(void)
 	enc_txn->size = GHOST_CPU_DATA_REGION_SIZE;
 }
 
-static int __init ghost_setup_root(void)
+static int __init abi_init(ghost_abi_ptr_t abi)
 {
-	int ret;
-	struct kernfs_root *fs_root;
-
-	fs_root = kernfs_create_root(NULL, KERNFS_ROOT_CREATE_DEACTIVATED |
-				     KERNFS_ROOT_EXTRA_OPEN_PERM_CHECK, NULL);
-	if (IS_ERR(fs_root))
-		return PTR_ERR(fs_root);
-
-	ret = gf_add_files(fs_root->kn, top_dirtab, NULL);
-	if (ret) {
-		kernfs_destroy_root(fs_root);
-		return ret;
-	}
-
-	ghost_kfs_root = fs_root;
+	if (WARN_ON_ONCE(abi->version != GHOST_VERSION))
+		return -1;
 
 	runtime_adjust_dirtabs();
-
-	kernfs_activate(ghost_kfs_root->kn);
-
-	return ret;
-}
-
-static int ghost_get_tree(struct fs_context *fc)
-{
-	int ret;
-
-	/* Technically, this should be in uapi/linux/magic.h. */
-	#define GHOST_SUPER_MAGIC 0xBAD1DEA2
-
-	VM_BUG_ON(!ghost_kfs_root);
-	ret = kernfs_get_tree(fc);
-	if (ret)
-		WARN(1, "Failed to mount ghostfs!");
-	return ret;
-}
-
-static void ghost_fs_context_free(struct fs_context *fc)
-{
-	struct kernfs_fs_context *kfc = fc->fs_private;
-
-	kernfs_free_fs_context(fc);
-	kfree(kfc);
-}
-
-static const struct fs_context_operations ghost_fs_context_ops = {
-	.free		= ghost_fs_context_free,
-	.get_tree	= ghost_get_tree,
-};
-
-static int ghost_init_fs_context(struct fs_context *fc)
-{
-	struct kernfs_fs_context *kfc;
-
-	kfc = kzalloc(sizeof(struct kernfs_fs_context), GFP_KERNEL);
-	if (!kfc)
-		return -ENOMEM;
-
-	kfc->root = ghost_kfs_root;
-	kfc->magic = GHOST_SUPER_MAGIC;
-	fc->fs_private = kfc;
-	fc->ops = &ghost_fs_context_ops;
-	put_user_ns(fc->user_ns);
-	fc->user_ns = get_user_ns(&init_user_ns);
-	fc->global = true;
 	return 0;
 }
 
-static void ghost_kill_sb(struct super_block *sb)
+static struct ghost_enclave *create_enclave(ghost_abi_ptr_t abi,
+					    struct kernfs_node *dir,
+					    ulong id)
 {
-	kernfs_kill_sb(sb);
+	bool vmalloc_failed = false;
+	struct ghost_enclave *e;
+	int cpu, ret;
+
+	BUILD_BUG_ON(sizeof(struct ghost_cpu_data) != PAGE_SIZE);
+
+	if (WARN_ON_ONCE(abi->version != GHOST_VERSION))
+		return ERR_PTR(-EINVAL);
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	if (e == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	spin_lock_init(&e->lock);
+	kref_init(&e->kref);
+	INIT_LIST_HEAD(&e->sw_region_list);
+	INIT_LIST_HEAD(&e->task_list);
+	INIT_LIST_HEAD(&e->inhibited_task_list);
+	INIT_LIST_HEAD(&e->ew.link);
+	INIT_WORK(&e->task_reaper, enclave_reap_tasks);
+	INIT_WORK(&e->enclave_actual_release, enclave_actual_release);
+	INIT_WORK(&e->enclave_destroyer, enclave_destroyer);
+
+	e->cpu_data = kcalloc(num_possible_cpus(),
+			      sizeof(struct ghost_cpu_data *), GFP_KERNEL);
+	if (!e->cpu_data) {
+		kfree(e);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	for_each_possible_cpu(cpu) {
+		e->cpu_data[cpu] = vmalloc_user_node_flags(PAGE_SIZE,
+							   cpu_to_node(cpu),
+							   GFP_KERNEL);
+		if (e->cpu_data[cpu] == NULL) {
+			vmalloc_failed = true;
+			break;
+		}
+	}
+
+	if (vmalloc_failed) {
+		for_each_possible_cpu(cpu)
+			vfree(e->cpu_data[cpu]);
+		kfree(e->cpu_data);
+		kfree(e);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	ret = gf_add_files(dir, enclave_dirtab, e);
+	if (ret) {
+		kref_put(&e->kref, enclave_release);
+		return ERR_PTR(ret);
+	}
+
+	e->id = id;
+	e->enclave_dir = dir;
+
+	return e;
 }
 
-static struct file_system_type ghost_fs_type = {
-	.name			= "ghost",
-	.init_fs_context	= ghost_init_fs_context,
-	.kill_sb		= ghost_kill_sb,
+DEFINE_GHOST_ABI(current_abi) = {
+	.version = GHOST_VERSION,
+	.abi_init = abi_init,
+	.create_enclave = create_enclave,
 };
 
-static int __init ghostfs_init(void)
-{
-	int ret = 0;
-
-	ret = ghost_setup_root();
-	if (ret)
-		return ret;
-
-	ret = sysfs_create_mount_point(fs_kobj, "ghost");
-	if (ret)
-		goto cleanup_root;
-
-	ret = register_filesystem(&ghost_fs_type);
-	if (ret)
-		goto cleanup_mountpoint;
-
-	return 0;
-
-cleanup_mountpoint:
-	sysfs_remove_mount_point(fs_kobj, "ghost");
-cleanup_root:
-	kernfs_destroy_root(ghost_kfs_root);
-	ghost_kfs_root = NULL;
-
-	return ret;
-}
-
-static void __exit ghostfs_exit(void)
-{
-	unregister_filesystem(&ghost_fs_type);
-	sysfs_remove_mount_point(fs_kobj, "ghost");
-	kernfs_destroy_root(ghost_kfs_root);
-}
-
-late_initcall(ghostfs_init);
-__exitcall(ghostfs_exit);

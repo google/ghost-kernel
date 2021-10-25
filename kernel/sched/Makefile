@@ -37,4 +37,5 @@ obj-$(CONFIG_MEMBARRIER) += membarrier.o
 obj-$(CONFIG_CPU_ISOLATION) += isolation.o
 obj-$(CONFIG_PSI) += psi.o
 obj-$(CONFIG_SCHED_CLASS_GHOST) += ghost.o
+obj-$(CONFIG_SCHED_CLASS_GHOST) += ghost_core.o
 obj-$(CONFIG_BPF) += bpf.o
