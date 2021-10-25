@@ -73,6 +73,8 @@ static int make_enclave(struct kernfs_node *parent, unsigned long id,
 		return PTR_ERR(e);
 	}
 
+	WARN_ON_ONCE(e->abi != abi);
+
 	/*
 	 * Once the enclave has been activated, it is available to userspace and
 	 * can be used for scheduling.  After that, we must destroy it by

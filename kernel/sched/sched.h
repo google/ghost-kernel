@@ -145,11 +145,15 @@ struct enclave_work {
 	bool run_task_reaper;
 };
 
+struct ghost_abi;
+
 /*
  * ghost_enclave is a container for the agents, queues and sw_regions
  * that express the scheduling policy for a set of CPUs.
  */
 struct ghost_enclave {
+	const struct ghost_abi *abi;
+
 	/*
 	 * 'lock' serializes mutation of 'sw_region_list' as well as
 	 * allocation and freeing of status words within a region.

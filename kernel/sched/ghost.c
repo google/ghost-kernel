@@ -7054,7 +7054,7 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	nr_tasks = e->nr_tasks;
 	spin_unlock_irqrestore(&e->lock, fl);
 
-	seq_printf(sf, "version %u\n", GHOST_VERSION);
+	seq_printf(sf, "version %u\n", e->abi->version);
 	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
 	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
 	return 0;
@@ -7064,6 +7064,21 @@ static struct kernfs_ops gf_ops_e_status = {
 	.open			= gf_e_open,
 	.release		= gf_e_release,
 	.seq_show		= gf_status_show,
+};
+
+static int gf_abi_version_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	WARN_ON_ONCE(e->abi->version != GHOST_VERSION);
+	seq_printf(sf, "%u\n", e->abi->version);
+	return 0;
+}
+
+static struct kernfs_ops gf_ops_e_abi_version = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_abi_version_show,
 };
 
 static struct gf_dirent enclave_dirtab[] = {
@@ -7121,6 +7136,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "status",
 		.mode		= 0444,
 		.ops		= &gf_ops_e_status,
+	},
+	{
+		.name		= "abi_version",
+		.mode		= 0444,
+		.ops		= &gf_ops_e_abi_version,
 	},
 	{0},
 };
@@ -7190,6 +7210,7 @@ static struct ghost_enclave *create_enclave(ghost_abi_ptr_t abi,
 	if (e == NULL)
 		return ERR_PTR(-ENOMEM);
 
+	e->abi = abi;
 	spin_lock_init(&e->lock);
 	kref_init(&e->kref);
 	INIT_LIST_HEAD(&e->sw_region_list);
