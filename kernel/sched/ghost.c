@@ -4663,7 +4663,7 @@ static void ghost_task_blocked(struct rq *rq, struct task_struct *p)
 	task_deliver_msg_blocked(rq, p);
 }
 
-void ghost_wait_for_rendezvous(struct rq *rq)
+static void wait_for_rendezvous(struct rq *rq)
 {
 	int64_t target;
 
@@ -7211,5 +7211,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.version = GHOST_VERSION,
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
+	.wait_for_rendezvous = wait_for_rendezvous,
 };
 

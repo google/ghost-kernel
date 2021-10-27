@@ -400,6 +400,22 @@ int64_t ghost_sync_group_cookie(void)
 	return val;
 }
 
+void ghost_wait_for_rendezvous(struct rq *rq)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	if (WARN_ON_ONCE(!e))
+		return;
+
+	e->abi->wait_for_rendezvous(rq);
+}
+
 void __init init_sched_ghost_class(void)
 {
 	int64_t cpu;

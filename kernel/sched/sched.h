@@ -255,7 +255,6 @@ static inline bool ghost_bpf_msg_send(struct ghost_enclave *e,
 }
 #endif
 
-extern void ghost_wait_for_rendezvous(struct rq *rq);
 extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);
 extern int64_t ghost_alloc_gtid(struct task_struct *p);
@@ -2225,6 +2224,7 @@ struct ghost_abi {
 	struct ghost_enclave *
 		(*create_enclave)(ghost_abi_ptr_t abi,
 				  struct kernfs_node *dir, ulong id);
+	void (*wait_for_rendezvous)(struct rq *rq);
 };
 
 #define DEFINE_GHOST_ABI(name) \
@@ -2249,6 +2249,7 @@ void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
 void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 
 int64_t ghost_sync_group_cookie(void);
+void ghost_wait_for_rendezvous(struct rq *rq);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)
