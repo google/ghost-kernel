@@ -5155,12 +5155,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	struct task_struct *p;
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	rq->ghost.check_prev_preemption = ghost_produce_prev_msgs(rq, prev);
-
-	/* a negative 'switchto_count' indicates end of the chain */
-	rq->ghost.switchto_count = -rq->ghost.switchto_count;
-	WARN_ON_ONCE(rq->ghost.switchto_count > 0);
-	rq->ghost.pnt_bpf_once = true;
+	ghost_pnt_prologue(rq, prev);
 #endif
 
 	/*

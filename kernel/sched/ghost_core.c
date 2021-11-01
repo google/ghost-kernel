@@ -416,6 +416,20 @@ void ghost_wait_for_rendezvous(struct rq *rq)
 	e->abi->wait_for_rendezvous(rq);
 }
 
+void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	if (e != NULL)
+		e->abi->pnt_prologue(rq, prev);
+}
+
 void __init init_sched_ghost_class(void)
 {
 	int64_t cpu;

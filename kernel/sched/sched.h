@@ -205,7 +205,6 @@ struct ghost_enclave {
 };
 
 /* In kernel/sched/ghost.c */
-extern bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev);
 extern void enclave_release(struct kref *k);
 extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
 extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
@@ -2225,6 +2224,7 @@ struct ghost_abi {
 		(*create_enclave)(ghost_abi_ptr_t abi,
 				  struct kernfs_node *dir, ulong id);
 	void (*wait_for_rendezvous)(struct rq *rq);
+	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 };
 
 #define DEFINE_GHOST_ABI(name) \
@@ -2250,6 +2250,7 @@ void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
+void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

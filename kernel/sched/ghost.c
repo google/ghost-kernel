@@ -1066,7 +1066,7 @@ static inline void ghost_prepare_switch(struct rq *rq, struct task_struct *prev,
  * msg was already produced for 'prev' (for e.g. agents don't expect to see a
  * TASK_PREEMPTED immediately after a TASK_BLOCKED).
  */
-bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev)
+static bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev)
 {
 	if (!task_has_ghost_policy(prev))
 		return false;
@@ -7207,10 +7207,24 @@ static struct ghost_enclave *create_enclave(ghost_abi_ptr_t abi,
 	return e;
 }
 
+/*
+ * Called at the start of every pick_next_task() via __schedule().
+ */
+static void pnt_prologue(struct rq *rq, struct task_struct *prev)
+{
+	rq->ghost.check_prev_preemption = ghost_produce_prev_msgs(rq, prev);
+
+	/* a negative 'switchto_count' indicates end of the chain */
+	rq->ghost.switchto_count = -rq->ghost.switchto_count;
+	WARN_ON_ONCE(rq->ghost.switchto_count > 0);
+	rq->ghost.pnt_bpf_once = true;
+}
+
 DEFINE_GHOST_ABI(current_abi) = {
 	.version = GHOST_VERSION,
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
 	.wait_for_rendezvous = wait_for_rendezvous,
+	.pnt_prologue = pnt_prologue,
 };
 
