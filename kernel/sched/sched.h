@@ -223,36 +223,9 @@ extern void ghost_latched_task_preempted(struct rq *rq);
 extern void ghost_task_preempted(struct rq *rq, struct task_struct *prev);
 extern void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p);
 extern unsigned long ghost_cfs_added_load(struct rq *rq);
-extern int ghost_wake_agent_on_check(int cpu);
 extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
-extern int ghost_run_gtid_on(s64 gtid, u32 task_barrier, int run_flags,
-			     int cpu);
 extern void ghost_cpu_idle(void);
-
-struct rq_flags;
-struct bpf_ghost_msg;
-#ifdef CONFIG_BPF
-extern bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq);
-extern void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
-			  struct rq_flags *rf);
-extern bool ghost_bpf_msg_send(struct ghost_enclave *e,
-			       struct bpf_ghost_msg *msg);
-#else
-static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
-{
-	return false;
-}
-static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
-				 struct rq_flags *rf)
-{
-}
-static inline bool ghost_bpf_msg_send(struct ghost_enclave *e,
-				      struct bpf_ghost_msg *msg)
-{
-	return true;
-}
-#endif
 
 extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);
@@ -2225,6 +2198,16 @@ struct ghost_abi {
 				  struct kernfs_node *dir, ulong id);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
+	int (*bpf_wake_agent)(int cpu);
+	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
+	bool (*ghost_msg_is_valid_access)(int off, int size,
+					  enum bpf_access_type type,
+					  const struct bpf_prog *prog,
+					  struct bpf_insn_access_aux *info);
+	int (*bpf_link_attach)(struct ghost_enclave *e, struct bpf_prog *prog,
+			       int prog_type, int attach_type);
+	void (*bpf_link_detach)(struct ghost_enclave *e, struct bpf_prog *prog,
+			        int prog_type, int attach_type);
 };
 
 #define DEFINE_GHOST_ABI(name) \

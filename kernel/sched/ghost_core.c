@@ -437,3 +437,275 @@ void __init init_sched_ghost_class(void)
 	for_each_possible_cpu(cpu)
 		per_cpu(sync_group_cookie, cpu) = cpu << SG_COOKIE_CPU_SHIFT;
 }
+
+#ifdef CONFIG_BPF
+#include <linux/filter.h>
+
+/*
+ * ghost bpf programs encode the ABI they were compiled against in the
+ * upper 16 bits of 'prog->expected_attach_type'.
+ */
+static inline int bpf_prog_eat_abi(const struct bpf_prog *prog)
+{
+	return (u32)prog->expected_attach_type >> 16;
+}
+
+static inline int bpf_prog_eat_type(const struct bpf_prog *prog)
+{
+	return prog->expected_attach_type & 0xFFFF;
+}
+
+BPF_CALL_1(bpf_ghost_wake_agent, u32, cpu)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	/*
+	 * Each BPF helper has a corresponding integer in uapi/linux/bpf.h,
+	 * similar to syscall numbers.  Catch any ABI inconsistencies between
+	 * prodkernel and open source.
+	 */
+	BUILD_BUG_ON(BPF_FUNC_ghost_wake_agent != 204);
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	return e->abi->bpf_wake_agent(cpu);
+}
+
+static const struct bpf_func_proto bpf_ghost_wake_agent_proto = {
+	.func		= bpf_ghost_wake_agent,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_ghost_run_gtid, s64, gtid, u32, task_barrier, int, run_flags)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	/*
+	 * Each BPF helper has a corresponding integer in uapi/linux/bpf.h,
+	 * similar to syscall numbers.  Catch any ABI inconsistencies between
+	 * prodkernel and open source.
+	 */
+	BUILD_BUG_ON(BPF_FUNC_ghost_run_gtid != 205);
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	return e->abi->bpf_run_gtid(gtid, task_barrier, run_flags,
+				    smp_processor_id());
+}
+
+static const struct bpf_func_proto bpf_ghost_run_gtid_proto = {
+	.func		= bpf_ghost_run_gtid,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+static const struct bpf_func_proto *
+ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	int eat = bpf_prog_eat_type(prog);
+
+	switch (func_id) {
+	case BPF_FUNC_ghost_wake_agent:
+		return &bpf_ghost_wake_agent_proto;
+	case BPF_FUNC_ghost_run_gtid:
+		switch (eat) {
+		case BPF_GHOST_SCHED_PNT:
+			return &bpf_ghost_run_gtid_proto;
+		default:
+			return NULL;
+		}
+	default:
+		return bpf_base_func_proto(func_id);
+	}
+}
+
+static bool ghost_sched_is_valid_access(int off, int size,
+					enum bpf_access_type type,
+					const struct bpf_prog *prog,
+					struct bpf_insn_access_aux *info)
+{
+	/* struct bpf_ghost_sched is empty so all accesses are invalid. */
+	return false;
+}
+
+
+const struct bpf_verifier_ops ghost_sched_verifier_ops = {
+	.get_func_proto		= ghost_sched_func_proto,
+	.is_valid_access	= ghost_sched_is_valid_access,
+};
+
+const struct bpf_prog_ops ghost_sched_prog_ops = {};
+
+static const struct bpf_func_proto *
+ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	switch (func_id) {
+	case BPF_FUNC_ghost_wake_agent:
+		return &bpf_ghost_wake_agent_proto;
+	default:
+		return bpf_base_func_proto(func_id);
+	}
+}
+
+static bool ghost_msg_is_valid_access(int off, int size,
+				      enum bpf_access_type type,
+				      const struct bpf_prog *prog,
+				      struct bpf_insn_access_aux *info)
+{
+	int version = bpf_prog_eat_abi(prog);
+	ghost_abi_ptr_t abi = ghost_abi_lookup(version);
+
+	if (WARN_ON_ONCE(!abi))
+		return false;
+
+	return abi->ghost_msg_is_valid_access(off, size, type, prog, info);
+}
+
+const struct bpf_verifier_ops ghost_msg_verifier_ops = {
+	.get_func_proto		= ghost_msg_func_proto,
+	.is_valid_access	= ghost_msg_is_valid_access,
+};
+
+const struct bpf_prog_ops ghost_msg_prog_ops = {};
+
+struct bpf_ghost_link {
+	struct bpf_link	link;
+	struct ghost_enclave *e;
+	enum bpf_prog_type prog_type;
+	enum bpf_attach_type ea_type;
+};
+
+static void bpf_ghost_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_ghost_link *sc_link =
+		container_of(link, struct bpf_ghost_link, link);
+
+	kfree(sc_link);
+}
+
+static void bpf_ghost_link_release(struct bpf_link *link)
+{
+	struct bpf_ghost_link *sc_link =
+		container_of(link, struct bpf_ghost_link, link);
+	struct ghost_enclave *e = sc_link->e;
+
+	if (WARN_ONCE(!e, "Missing enclave for bpf link ea_type %d!",
+		      sc_link->ea_type))
+		return;
+
+	e->abi->bpf_link_detach(e, link->prog,
+				sc_link->prog_type, sc_link->ea_type);
+
+	kref_put(&e->kref, enclave_release);
+	sc_link->e = NULL;
+}
+
+static const struct bpf_link_ops bpf_ghost_link_ops = {
+	.release = bpf_ghost_link_release,
+	.dealloc = bpf_ghost_link_dealloc,
+};
+
+int ghost_bpf_link_attach(const union bpf_attr *attr,
+			  struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct bpf_ghost_link *sc_link;
+	enum bpf_attach_type ea_type;
+	struct ghost_enclave *e;
+	struct fd f_enc = {0};
+	int err, ea_abi;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+	if (prog->expected_attach_type != attr->link_create.attach_type)
+		return -EINVAL;
+
+	/* Mask the ABI value encoded in the upper 16 bits. */
+	ea_type = bpf_prog_eat_type(prog);
+	ea_abi = bpf_prog_eat_abi(prog);
+
+	switch (prog->type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (ea_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+		case BPF_GHOST_SCHED_PNT:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (ea_type) {
+		case BPF_GHOST_MSG_SEND:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	sc_link = kzalloc(sizeof(*sc_link), GFP_USER);
+	if (!sc_link)
+		return -ENOMEM;
+	bpf_link_init(&sc_link->link, BPF_LINK_TYPE_UNSPEC,
+		      &bpf_ghost_link_ops, prog);
+	sc_link->prog_type = prog->type;
+	sc_link->ea_type = ea_type;
+
+	err = bpf_link_prime(&sc_link->link, &link_primer);
+	if (err) {
+		kfree(sc_link);
+		return -EINVAL;
+	}
+
+	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
+	if (!e || ea_abi != enclave_abi(e)) {
+		ghost_fdput_enclave(e, &f_enc);
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
+		bpf_link_cleanup(&link_primer);
+		return -EBADF;
+	}
+
+	/*
+	 * On success, sc_link will hold a kref on the enclave, which will get
+	 * put when the link's FD is closed (and thus bpf_link_put ->
+	 * bpf_link_free -> our release).  This is similar to how ghostfs files
+	 * hold a kref on the enclave.  Release is not called on failure.
+	 */
+	kref_get(&e->kref);
+	sc_link->e = e;
+	ghost_fdput_enclave(e, &f_enc);
+
+	err = e->abi->bpf_link_attach(e, prog, prog->type, ea_type);
+
+	if (err) {
+		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
+		bpf_link_cleanup(&link_primer);
+		kref_put(&e->kref, enclave_release);
+		return err;
+	}
+
+	return bpf_link_settle(&link_primer);
+}
+#endif

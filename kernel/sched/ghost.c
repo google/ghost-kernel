@@ -139,6 +139,109 @@ static inline bool enclave_is_reapable(struct ghost_enclave *e)
 	return false;
 }
 
+#ifdef CONFIG_BPF
+#include <linux/filter.h>
+
+static bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
+{
+	struct bpf_ghost_sched_kern ctx = {};
+	struct bpf_prog *prog;
+
+	lockdep_assert_held(&rq->lock);
+
+	prog = rcu_dereference(e->bpf_tick);
+	if (!prog)
+		return false;
+
+	/* prog returns 1 if we want a tick on this cpu. */
+	return BPF_PROG_RUN(prog, &ctx) != 1;
+}
+
+#define BPF_GHOST_PNT_DONT_IDLE		1
+
+static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
+			  struct rq_flags *rf)
+{
+	struct bpf_ghost_sched_kern ctx = {};
+	struct bpf_prog *prog;
+	int ret;
+
+	lockdep_assert_held(&rq->lock);
+
+	rcu_read_lock();
+	prog = rcu_dereference(e->bpf_pnt);
+	if (!prog) {
+		rcu_read_unlock();
+		return;
+	}
+
+	/*
+	 * BPF programs attached here may call ghost_run_gtid(), which requires
+	 * that we not hold any RQ locks.  We are called from
+	 * pick_next_task_ghost where it is safe to unlock the RQ.
+	 */
+	rq_unpin_lock(rq, rf);
+	raw_spin_unlock(&rq->lock);
+
+	ret = BPF_PROG_RUN(prog, &ctx);
+
+	raw_spin_lock(&rq->lock);
+	rq_repin_lock(rq, rf);
+
+	rcu_read_unlock();
+
+	if (ret == BPF_GHOST_PNT_DONT_IDLE) {
+		/*
+		 * The next time this rq selects the idle task, it will bail out
+		 * of do_idle() quickly.  Since we unlocked the RQ lock, it's
+		 * possible that this rq will pick something other than the idle
+		 * task, which is fine.
+		 */
+		rq->ghost.dont_idle_once = true;
+	}
+}
+
+/*
+ * Returns true (default) if the user wants us to send the message.
+ * Note that our caller holds an RQ lock, and we can't safely unlock it, so
+ * programs at the attach point can't call ghost_run_gtid().
+ */
+static bool ghost_bpf_msg_send(struct ghost_enclave *e,
+			       struct bpf_ghost_msg *msg)
+{
+	struct bpf_prog *prog;
+	bool send;
+
+	rcu_read_lock();
+	prog = rcu_dereference(e->bpf_msg_send);
+	if (!prog) {
+		rcu_read_unlock();
+		return true;
+	}
+	/* Program returns 0 if they want us to send the message. */
+	send = BPF_PROG_RUN(prog, msg) == 0;
+	rcu_read_unlock();
+	return send;
+}
+#else
+static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
+{
+	return false;
+}
+
+static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
+				 struct rq_flags *rf)
+{
+	return;
+}
+
+static inline bool ghost_bpf_msg_send(struct ghost_enclave *e,
+				      struct bpf_ghost_msg *msg)
+{
+	return true;
+}
+#endif	/* CONFIG_BPF */
+
 /*
  * There are certain things we can't do in the scheduler while holding rq locks
  * (or enclave locks, which are ordered after the rq lock), such as
@@ -3827,6 +3930,12 @@ static inline int __produce_for_task(struct task_struct *p,
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
 	};
+	/*
+	 * XXX for a task that enters ghost into enclave_X but on a cpu
+	 * that belongs to enclave_Y then we'll call the 'bpf_msg_send'
+	 * program attached to enclave_X but any BPF helpers used by the
+	 * program will callback into enclave_Y.
+	 */
 	if (!ghost_bpf_msg_send(p->ghost.enclave, msg))
 		return -ENOMSG;
 	return _produce(p->ghost.dst_q, barrier, msg->type,
@@ -4539,7 +4648,7 @@ static void ghost_wake_agent_on(int cpu)
 	put_cpu();
 }
 
-int ghost_wake_agent_on_check(int cpu)
+static int ghost_wake_agent_on_check(int cpu)
 {
 	int this_cpu = get_cpu();
 	int ret;
@@ -5008,18 +5117,6 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	task_rq_unlock(rq, next, &rf);
 
 	return 0;
-}
-
-/*
- * Attempts to run gtid on cpu.  Returns 0 or -error.
- *
- * Called from BPF helpers.  The programs that can call those helpers are
- * explicitly allowed in ghost_sched_func_proto.
- */
-int ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags, int cpu)
-{
-	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
-				   /*check_caller_enclave=*/ false);
 }
 
 static inline bool _ghost_txn_ready(int cpu, int *commit_flags)
@@ -7130,6 +7227,16 @@ static void runtime_adjust_dirtabs(void)
 
 static int __init abi_init(ghost_abi_ptr_t abi)
 {
+	/*
+	 * ghost bpf programs encode the ABI they were compiled against
+	 * in the upper 16 bits of 'prog->expected_attach_type' which
+	 * only works as long as GHOST_VERSION can fit within 16 bits.
+	 *
+	 * Ideally this would be in ghost_bpf_link_attach() but we cannot
+	 * include the uapi header in ghost_core.c so we check it here.
+	 */
+	BUILD_BUG_ON(GHOST_VERSION > 0xFFFF);
+
 	if (WARN_ON_ONCE(abi->version != GHOST_VERSION))
 		return -EINVAL;
 
@@ -7215,11 +7322,197 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 	rq->ghost.pnt_bpf_once = true;
 }
 
+static int bpf_wake_agent(int cpu)
+{
+	return ghost_wake_agent_on_check(cpu);
+}
+
+/*
+ * Attempts to run gtid on cpu.  Returns 0 or -error.
+ *
+ * Called from BPF helpers.  The programs that can call those helpers are
+ * explicitly allowed in ghost_sched_func_proto.
+ */
+static int bpf_run_gtid(s64 gtid, u32 task_barrier, int run_flags, int cpu)
+{
+	bool check_caller_enclave = (cpu != smp_processor_id());
+
+	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
+				   check_caller_enclave);
+}
+
+static bool ghost_msg_is_valid_access(int off, int size,
+				      enum bpf_access_type type,
+				      const struct bpf_prog *prog,
+				      struct bpf_insn_access_aux *info)
+{
+	/* The verifier guarantees that size > 0. */
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_msg) || off % size)
+		return false;
+
+	return true;
+}
+
+static int ghost_sched_tick_attach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_tick) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_tick, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_sched_tick_detach(struct ghost_enclave *e,
+				    struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_tick, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
+static int ghost_sched_pnt_attach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_pnt) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_pnt, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_sched_pnt_detach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_pnt, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
+static int ghost_msg_send_attach(struct ghost_enclave *e,
+				 struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_msg_send) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_msg_send, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_msg_send_detach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_msg_send, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
+static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
+			   int prog_type, int attach_type)
+{
+	int err;
+
+	switch (prog_type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (attach_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+			err = ghost_sched_tick_attach(e, prog);
+			break;
+		case BPF_GHOST_SCHED_PNT:
+			err = ghost_sched_pnt_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad sched bpf attach_type %d", attach_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (attach_type) {
+		case BPF_GHOST_MSG_SEND:
+			err = ghost_msg_send_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad msg bpf attach_type %d", attach_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
+	default:
+		pr_warn("bad bpf prog_type %d", prog_type);
+		err = -EINVAL;
+	}
+
+	return err;
+}
+
+static void bpf_link_detach(struct ghost_enclave *e, struct bpf_prog *prog,
+			    int prog_type, int attach_type)
+{
+	switch (prog_type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+		switch (attach_type) {
+		case BPF_GHOST_SCHED_SKIP_TICK:
+			ghost_sched_tick_detach(e, prog);
+			break;
+		case BPF_GHOST_SCHED_PNT:
+			ghost_sched_pnt_detach(e, prog);
+			break;
+		default:
+			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
+				  e->id, prog_type, attach_type);
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_MSG:
+		switch (attach_type) {
+		case BPF_GHOST_MSG_SEND:
+			ghost_msg_send_detach(e, prog);
+			break;
+		default:
+			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
+				  e->id, prog_type, attach_type);
+			break;
+		}
+		break;
+	default:
+		WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
+			  e->id, prog_type, attach_type);
+		break;
+	}
+}
+
 DEFINE_GHOST_ABI(current_abi) = {
 	.version = GHOST_VERSION,
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
+	.bpf_wake_agent = bpf_wake_agent,
+	.bpf_run_gtid = bpf_run_gtid,
+	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
+	.bpf_link_attach = bpf_link_attach,
+	.bpf_link_detach = bpf_link_detach,
 };
 
