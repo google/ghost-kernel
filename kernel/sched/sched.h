@@ -2251,6 +2251,11 @@ void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
+
+static inline int enclave_abi(const struct ghost_enclave *e)
+{
+	return e->abi->version;
+}
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

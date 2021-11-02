@@ -117,11 +117,6 @@ static bool check_same_enclave(int cpu_x, int cpu_y)
 	return x == y;
 }
 
-static inline uint enclave_abi(struct ghost_enclave *e)
-{
-	return GHOST_VERSION;	/* for now all enclaves have the same abi */
-}
-
 /* enclave::is_dying */
 #define ENCLAVE_IS_DYING	(1U << 0)
 #define ENCLAVE_IS_REAPABLE	(1U << 1)

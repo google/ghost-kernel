@@ -375,11 +375,6 @@ static const struct bpf_link_ops bpf_ghost_link_ops = {
 	.dealloc = bpf_ghost_link_dealloc,
 };
 
-static inline uint enclave_abi(struct ghost_enclave *e)
-{
-	return GHOST_VERSION;	/* for now all enclaves have the same abi */
-}
-
 int ghost_bpf_link_attach(const union bpf_attr *attr,
 			  struct bpf_prog *prog)
 {
