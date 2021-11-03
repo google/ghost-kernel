@@ -615,7 +615,7 @@ static void bpf_ghost_link_release(struct bpf_link *link)
 	e->abi->bpf_link_detach(e, link->prog,
 				sc_link->prog_type, sc_link->ea_type);
 
-	kref_put(&e->kref, enclave_release);
+	kref_put(&e->kref, e->abi->enclave_release);
 	sc_link->e = NULL;
 }
 
@@ -702,7 +702,7 @@ int ghost_bpf_link_attach(const union bpf_attr *attr,
 	if (err) {
 		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
 		bpf_link_cleanup(&link_primer);
-		kref_put(&e->kref, enclave_release);
+		kref_put(&e->kref, e->abi->enclave_release);
 		return err;
 	}
 

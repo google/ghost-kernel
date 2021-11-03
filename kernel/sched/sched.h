@@ -205,7 +205,6 @@ struct ghost_enclave {
 };
 
 /* In kernel/sched/ghost.c */
-extern void enclave_release(struct kref *k);
 extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
 extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 
@@ -2196,6 +2195,7 @@ struct ghost_abi {
 	struct ghost_enclave *
 		(*create_enclave)(ghost_abi_ptr_t abi,
 				  struct kernfs_node *dir, ulong id);
+	void (*enclave_release)(struct kref *k);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	int (*bpf_wake_agent)(int cpu);

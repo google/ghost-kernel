@@ -96,6 +96,7 @@ static const struct file_operations queue_fops;
 static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f);
 static void ghostfs_put_enclave_ctl(struct file *f);
 static void ghost_destroy_enclave(struct ghost_enclave *e);
+static void enclave_release(struct kref *k);
 
 /* True if X and Y have the same enclave, including having no enclave. */
 static bool check_same_enclave(int cpu_x, int cpu_y)
@@ -1946,7 +1947,7 @@ static void enclave_actual_release(struct work_struct *w)
 	kfree(e);
 }
 
-void enclave_release(struct kref *k)
+static void enclave_release(struct kref *k)
 {
 	struct ghost_enclave *e = container_of(k, struct ghost_enclave, kref);
 
@@ -7507,6 +7508,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.version = GHOST_VERSION,
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
+	.enclave_release = enclave_release,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.bpf_wake_agent = bpf_wake_agent,
