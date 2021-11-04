@@ -478,6 +478,29 @@ void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd)
 	fdput(*fd);
 }
 
+#define GHOST_SCHED_TASK_PRIO	0
+#define GHOST_SCHED_AGENT_PRIO	1
+int ghost_validate_sched_attr(const struct sched_attr *attr)
+{
+	/*
+	 * A thread can only make a task an agent if the thread has the
+         * CAP_SYS_NICE capability.
+	 */
+	switch (attr->sched_priority) {
+		case GHOST_SCHED_TASK_PRIO:
+			return 0;
+		case GHOST_SCHED_AGENT_PRIO:
+			return capable(CAP_SYS_NICE) ? 0 : -EPERM;
+		default:
+			return -EINVAL;
+	}
+}
+
+bool ghost_agent(const struct sched_attr *attr)
+{
+	return attr->sched_priority == GHOST_SCHED_AGENT_PRIO;
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 

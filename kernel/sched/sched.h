@@ -207,8 +207,6 @@ struct ghost_enclave {
 /* In kernel/sched/ghost.c */
 extern void init_sched_ghost_class(void);
 extern void init_ghost_rq(struct ghost_rq *ghost_rq);
-extern bool ghost_agent(const struct sched_attr *attr);
-extern int ghost_validate_sched_attr(const struct sched_attr *attr);
 extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      const struct sched_attr *attr,
 			      struct ghost_enclave *new_e,
@@ -2242,6 +2240,9 @@ void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
  */
 struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
 void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
+
+bool ghost_agent(const struct sched_attr *attr);
+int ghost_validate_sched_attr(const struct sched_attr *attr);
 
 static inline int enclave_abi(const struct ghost_enclave *e)
 {

@@ -3015,27 +3015,6 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 	return ret;
 }
 
-int ghost_validate_sched_attr(const struct sched_attr *attr)
-{
-	/*
-	 * A thread can only make a task an agent if the thread has the
-         * CAP_SYS_NICE capability.
-	 */
-	switch (attr->sched_priority) {
-		case GHOST_SCHED_TASK_PRIO:
-			return 0;
-		case GHOST_SCHED_AGENT_PRIO:
-			return capable(CAP_SYS_NICE) ? 0 : -EPERM;
-		default:
-			return -EINVAL;
-	}
-}
-
-bool ghost_agent(const struct sched_attr *attr)
-{
-	return attr->sched_priority == GHOST_SCHED_AGENT_PRIO;
-}
-
 /* Makes newq the default for e. */
 static void enclave_set_default_queue(struct ghost_enclave *e,
 				      struct ghost_queue *newq)
