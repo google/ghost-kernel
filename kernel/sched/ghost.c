@@ -93,8 +93,6 @@ static void __enclave_remove_task(struct ghost_enclave *e,
 static int __sw_region_free(struct ghost_sw_region *region);
 static const struct file_operations queue_fops;
 
-static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f);
-static void ghostfs_put_enclave_ctl(struct file *f);
 static void ghost_destroy_enclave(struct ghost_enclave *e);
 static void enclave_release(struct kref *k);
 
@@ -2217,37 +2215,6 @@ out_e:
 	free_cpumask_var(del);
 
 	return ret;
-}
-
-/*
- * Helper to get an fd and translate it to an enclave.  Ghostfs will maintain a
- * kref on the enclave.  That kref is increffed when the file was opened, and
- * that kref is maintained by this call (a combination of fdget and
- * kernfs_get_active).  Once you call ghost_fdput_enclave(), the enclave kref
- * can be released.
- *
- * Returns NULL if there is not a ghost_enclave for this FD, which could be due
- * to concurrent enclave destruction.
- *
- * Caller must call ghost_fdput_enclave with e and &fd_to_put, even on error.
- */
-struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
-{
-	*fd_to_put = fdget(fd);
-	if (!fd_to_put->file)
-		return NULL;
-	return ghostfs_ctl_to_enclave(fd_to_put->file);
-}
-
-/*
- * Pairs with calls to ghost_fdget_enclave().  You can't call this while holding
- * the rq lock.
- */
-void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put)
-{
-	if (e)
-		ghostfs_put_enclave_ctl(fd_to_put->file);
-	fdput(*fd_to_put);
 }
 
 static struct ghost_queue *fd_to_queue(struct fd f)
@@ -6919,7 +6886,7 @@ static struct kernfs_ops gf_ops_e_ctl = {
  * need to do it manually here, because this is is a "backdoor" function to get
  * the enclave pointer.  That pointer is kept alive by kernfs.
  */
-static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
+static struct ghost_enclave *ctlfd_enclave_get(struct file *f)
 {
 	struct kernfs_node *kn;
 
@@ -6936,8 +6903,8 @@ static struct ghost_enclave *ghostfs_ctl_to_enclave(struct file *f)
 	return kn->priv;
 }
 
-/* Pair this with a successful ghostfs_ctl_to_enclave call. */
-static void ghostfs_put_enclave_ctl(struct file *f)
+/* Pair this with a successful ctlfd_enclave_get() call. */
+static void ctlfd_enclave_put(struct file *f)
 {
 	struct kernfs_node *kn;
 
@@ -7509,6 +7476,8 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
 	.enclave_release = enclave_release,
+	.ctlfd_enclave_get = ctlfd_enclave_get,
+	.ctlfd_enclave_put = ctlfd_enclave_put,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.bpf_wake_agent = bpf_wake_agent,

@@ -205,9 +205,6 @@ struct ghost_enclave {
 };
 
 /* In kernel/sched/ghost.c */
-extern struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
-extern void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
-
 extern void init_sched_ghost_class(void);
 extern void init_ghost_rq(struct ghost_rq *ghost_rq);
 extern bool ghost_agent(const struct sched_attr *attr);
@@ -2196,6 +2193,8 @@ struct ghost_abi {
 		(*create_enclave)(ghost_abi_ptr_t abi,
 				  struct kernfs_node *dir, ulong id);
 	void (*enclave_release)(struct kref *k);
+	struct ghost_enclave *(*ctlfd_enclave_get)(struct file *file);
+	void (*ctlfd_enclave_put)(struct file *file);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	int (*bpf_wake_agent)(int cpu);
@@ -2234,6 +2233,15 @@ void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
+
+/*
+ * Helper to map an 'fd' to a 'ghost_enclave'. Must always be followed with
+ * a call to ghost_fdput_enclave() even if the lookup fails.
+ *
+ * N.B. ghost_fdput_enclave() cannot be called with 'rq->lock' held.
+ */
+struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
+void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 
 static inline int enclave_abi(const struct ghost_enclave *e)
 {

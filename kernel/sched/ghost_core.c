@@ -438,6 +438,46 @@ void __init init_sched_ghost_class(void)
 		per_cpu(sync_group_cookie, cpu) = cpu << SG_COOKIE_CPU_SHIFT;
 }
 
+/*
+ * Helper to get an fd and translate it to an enclave.  Ghostfs will maintain a
+ * kref on the enclave.  That kref is increffed when the file was opened, and
+ * that kref is maintained by this call (a combination of fdget and
+ * kernfs_get_active).  Once you call ghost_fdput_enclave(), the enclave kref
+ * can be released.
+ *
+ * Returns NULL if there is not a ghost_enclave for this FD, which could be due
+ * to concurrent enclave destruction.
+ *
+ * Caller must call ghost_fdput_enclave with e and &fd_to_put, even on error.
+ */
+struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
+{
+	ghost_abi_ptr_t abi;
+	struct ghost_enclave *e = NULL;
+
+	*fd_to_put = fdget(fd);
+	if (!fd_to_put->file)
+		return NULL;
+
+	for_each_abi(abi) {
+		e = abi->ctlfd_enclave_get(fd_to_put->file);
+		if (e)
+			break;
+	}
+	return e;
+}
+
+/*
+ * Pairs with calls to ghost_fdget_enclave().  You can't call this while holding
+ * the rq lock.
+ */
+void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd)
+{
+	if (e)
+		e->abi->ctlfd_enclave_put(fd->file);
+	fdput(*fd);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
