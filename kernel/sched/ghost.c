@@ -6294,12 +6294,9 @@ static void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next)
 		ghost_wake_agent_on(agent_target_cpu(rq));
 }
 
-void ghost_cpu_idle(void)
+static void cpu_idle(struct rq *rq)
 {
-	struct rq *rq = this_rq();
 	struct rq_flags rf;
-
-	WARN_ON_ONCE(current != rq->idle);
 
 	rq_lock_irq(rq, &rf);
 	if (rq->ghost.dont_idle_once) {
@@ -7589,6 +7586,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,
+	.cpu_idle = cpu_idle,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,

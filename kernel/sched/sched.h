@@ -213,8 +213,6 @@ extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
 extern unsigned long ghost_cfs_added_load(struct rq *rq);
-extern void ghost_agent_schedule(void);
-extern void ghost_cpu_idle(void);
 
 extern void ghost_tick(struct rq *rq);
 extern int64_t ghost_alloc_gtid(struct task_struct *p);
@@ -2190,6 +2188,7 @@ struct ghost_abi {
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
+	void (*cpu_idle)(struct rq *rq);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
 	bool (*ghost_msg_is_valid_access)(int off, int size,
@@ -2247,6 +2246,10 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next);
+void ghost_cpu_idle(void);
+
+/* ghost functions in core.c */
+void ghost_agent_schedule(void);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

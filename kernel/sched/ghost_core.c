@@ -544,6 +544,21 @@ void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 		e->abi->prepare_task_switch(rq, prev, next);
 }
 
+void ghost_cpu_idle(void)
+{
+	struct ghost_enclave *e;
+	struct rq *rq = this_rq();
+
+	WARN_ON_ONCE(preemptible());
+	WARN_ON_ONCE(current != rq->idle);
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	if (e)
+		e->abi->cpu_idle(rq);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
