@@ -52,9 +52,6 @@ struct ghost_sw_region {
 	struct ghost_enclave *enclave;
 };
 
-/* The load contribution that CFS sees for a running ghOSt task */
-unsigned long sysctl_ghost_cfs_load_added = 1024;
-
 static void _ghost_task_new(struct rq *rq, struct task_struct *p,
 			    bool runnable);
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
@@ -6305,55 +6302,6 @@ static void cpu_idle(struct rq *rq)
 		rq->ghost.dont_idle_once = false;
 	}
 	rq_unlock_irq(rq, &rf);
-}
-
-unsigned long ghost_cfs_added_load(struct rq *rq)
-{
-	int ghost_nr_running = rq->ghost.ghost_nr_running;
-	struct task_struct *curr;
-	bool add_load = false;
-
-	/* No ghost tasks; nothing to contribute load. */
-	if (!ghost_nr_running)
-		return 0;
-
-	/*
-	 * We have a few cases where we want to add load:
-	 * (a): We have a local agent that is not blocked_in_run.
-	 * (b): Currently have a non-agent ghost task running.
-	 * (c): Have a latched task that is not yet running. We
-	 * treat this the same as case (b), since this is really
-	 * just a race over getting through schedule() (modulo possible
-	 * preemption by another sched_class).
-	 */
-
-	if (ghost_nr_running > __ghost_extra_nr_running(rq)) {
-		/* (a) */
-		add_load = true;
-		goto out;
-	}
-
-	rcu_read_lock();
-	curr = READ_ONCE(rq->curr);
-	if (task_has_ghost_policy(curr) && !is_agent(rq, curr) &&
-	    curr->state == TASK_RUNNING) {
-		/* (b) */
-		add_load = true;
-	}
-	curr = NULL; /* don't use outside of RCU */
-	rcu_read_unlock();
-	if (add_load)
-		goto out;
-
-	if (rq->ghost.latched_task) {
-		/* (c) */
-		add_load = true;
-	}
-
-out:
-	if (add_load)
-		return sysctl_ghost_cfs_load_added;
-	return 0;
 }
 
 #include "../../fs/kernfs/kernfs-internal.h"

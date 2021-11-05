@@ -212,7 +212,6 @@ extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      int *reset_on_fork);
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
-extern unsigned long ghost_cfs_added_load(struct rq *rq);
 
 extern void ghost_tick(struct rq *rq);
 extern int64_t ghost_alloc_gtid(struct task_struct *p);
@@ -2247,6 +2246,8 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next);
 void ghost_cpu_idle(void);
+
+unsigned long ghost_cfs_added_load(struct rq *rq);
 
 /* ghost functions in core.c */
 void ghost_agent_schedule(void);
