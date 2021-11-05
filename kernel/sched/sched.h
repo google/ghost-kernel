@@ -205,7 +205,6 @@ struct ghost_enclave {
 };
 
 /* In kernel/sched/ghost.c */
-extern void init_sched_ghost_class(void);
 extern void init_ghost_rq(struct ghost_rq *ghost_rq);
 extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      const struct sched_attr *attr,
@@ -213,19 +212,13 @@ extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      int *reset_on_fork);
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
-extern void ghost_latched_task_preempted(struct rq *rq);
-extern void ghost_task_preempted(struct rq *rq, struct task_struct *prev);
-extern void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p);
 extern unsigned long ghost_cfs_added_load(struct rq *rq);
-extern void ghost_wake_agent_of(struct task_struct *p);
 extern void ghost_agent_schedule(void);
 extern void ghost_cpu_idle(void);
 
-extern void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next);
 extern void ghost_tick(struct rq *rq);
 extern int64_t ghost_alloc_gtid(struct task_struct *p);
 extern void ghost_initialize_status_word(struct task_struct *p);
-extern void ghost_task_new(struct rq *rq, struct task_struct *p);
 extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
 			   struct task_struct *next, int switchto_flags);
 
@@ -2195,6 +2188,8 @@ struct ghost_abi {
 	void (*ctlfd_enclave_put)(struct file *file);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
+	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
+				    struct task_struct *next);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
 	bool (*ghost_msg_is_valid_access)(int off, int size,
@@ -2223,6 +2218,7 @@ const static struct ghost_abi __##name##_ghost_abi	\
 
 _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
+void init_sched_ghost_class(void);
 int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
 void ghost_publish_cpu(struct ghost_enclave *e, int cpu);
 void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
@@ -2248,6 +2244,9 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 {
 	return e->abi->version;
 }
+
+void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
+			       struct task_struct *next);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

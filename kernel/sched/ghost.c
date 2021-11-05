@@ -78,8 +78,13 @@ static void ghost_commit_all_greedy_txns(void);
 static void ghost_commit_pending_txn(int where);
 static void release_from_ghost(struct rq *rq, struct task_struct *p);
 static void ghost_wake_agent_on(int cpu);
+static void ghost_wake_agent_of(struct task_struct *p);
+static void ghost_latched_task_preempted(struct rq *rq);
+static void ghost_task_preempted(struct rq *rq, struct task_struct *p);
 static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
 				  bool was_latched);
+
+static void ghost_task_new(struct rq *rq, struct task_struct *p);
 
 struct rq *context_switch(struct rq *rq, struct task_struct *prev,
 			  struct task_struct *next, struct rq_flags *rf);
@@ -1211,7 +1216,7 @@ static bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev)
 	return true;
 }
 
-void ghost_latched_task_preempted(struct rq *rq)
+static void ghost_latched_task_preempted(struct rq *rq)
 {
 	struct task_struct *latched = rq->ghost.latched_task;
 
@@ -4606,7 +4611,7 @@ static int ghost_wake_agent_on_check(int cpu)
 	return ret;
 }
 
-void ghost_wake_agent_of(struct task_struct *p)
+static void ghost_wake_agent_of(struct task_struct *p)
 {
 	ghost_wake_agent_on(task_target_cpu(p));
 }
@@ -4650,7 +4655,7 @@ static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
 		schedule_agent(rq, false);
 }
 
-void ghost_task_preempted(struct rq *rq, struct task_struct *p)
+static void ghost_task_preempted(struct rq *rq, struct task_struct *p)
 {
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
@@ -4658,7 +4663,7 @@ void ghost_task_preempted(struct rq *rq, struct task_struct *p)
 	_ghost_task_preempted(rq, p, false);
 }
 
-void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p)
+static void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p)
 {
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
@@ -4689,7 +4694,7 @@ static void _ghost_task_new(struct rq *rq, struct task_struct *p, bool runnable)
 	task_deliver_msg_task_new(rq, p, runnable);
 }
 
-void ghost_task_new(struct rq *rq, struct task_struct *p)
+static void ghost_task_new(struct rq *rq, struct task_struct *p)
 {
 	_ghost_task_new(rq, p, task_on_rq_queued(p));
 }
@@ -6283,7 +6288,7 @@ void ghost_switchto(struct rq *rq, struct task_struct *prev,
 	}
 }
 
-void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next)
+static void ghost_need_cpu_not_idle(struct rq *rq, struct task_struct *next)
 {
 	if (cpu_deliver_msg_not_idle(rq, next))
 		ghost_wake_agent_on(agent_target_cpu(rq));
@@ -7269,6 +7274,130 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 	rq->ghost.pnt_bpf_once = true;
 }
 
+/*
+ * Called in the context switch path when switching from 'prev' to 'next'
+ * (either via a normal schedule or switchto).
+ */
+static void prepare_task_switch(struct rq *rq, struct task_struct *prev,
+				struct task_struct *next)
+{
+	struct ghost_status_word *agent_sw;
+
+	if (rq->ghost.agent) {
+		/*
+		 * XXX pick_next_task_fair() can return 'rq->idle' via
+		 * core_tag_pick_next_matching_rendezvous().
+		 */
+		agent_sw = rq->ghost.agent->ghost.status_word;
+		if (!task_has_ghost_policy(next) && next != rq->idle) {
+			ghost_sw_clear_flag(agent_sw, GHOST_SW_CPU_AVAIL);
+			if (rq->ghost.run_flags & NEED_CPU_NOT_IDLE) {
+				rq->ghost.run_flags &= ~NEED_CPU_NOT_IDLE;
+				ghost_need_cpu_not_idle(rq, next);
+			}
+		} else {
+			ghost_sw_set_flag(agent_sw, GHOST_SW_CPU_AVAIL);
+		}
+	}
+
+	if (!task_has_ghost_policy(prev))
+		goto done;
+
+	/* Who watches the watchmen? */
+	if (prev == rq->ghost.agent)
+		goto done;
+
+	/*
+	 * An oncpu task may switch into ghost (e.g. via a third party calling
+	 * sched_setscheduler(2)) while the rq->lock is dropped in one of the
+	 * pick_next_task handlers (e.g. during CFS idle load balancing).
+	 *
+	 * It is not possible to distinguish this in switched_to_ghost() so
+	 * we resolve 'prev->ghost.new_task' here. Failing to do this has
+	 * dire consequences if 'prev' is runnable since it will languish
+	 * in the kernel forever (in contrast to a blocked task there is
+	 * no trigger forthcoming to produce a TASK_NEW in the future).
+	 */
+	if (unlikely(prev->ghost.new_task)) {
+		WARN_ON_ONCE(prev->ghost.yield_task);
+		WARN_ON_ONCE(prev->ghost.blocked_task);
+
+		/*
+		 * We just produced TASK_NEW so no need to consider 'prev' for
+		 * a preemption edge (see ghost_produce_prev_msgs for details).
+		 */
+		rq->ghost.check_prev_preemption = false;
+
+		prev->ghost.new_task = false;
+		ghost_task_new(rq, prev);
+		ghost_wake_agent_of(prev);
+	}
+
+	/* If we're on the ghost.tasks list, then we're runnable. */
+	if (!list_empty(&prev->ghost.run_list)) {
+		/*
+		 * Keep ghost.tasks sorted by last_runnable_at.  Whenever we set
+		 * the time, we append to the tail.
+		 */
+		list_del_init(&prev->ghost.run_list);
+		list_add_tail(&prev->ghost.run_list, &rq->ghost.tasks);
+		prev->ghost.last_runnable_at = ktime_get();
+	}
+
+	if (rq->ghost.check_prev_preemption) {
+		rq->ghost.check_prev_preemption = false;
+		ghost_task_preempted(rq, prev);
+		ghost_wake_agent_of(prev);
+	}
+
+done:
+	/*
+	 * Clear the ONCPU bit after producing the task state change msg
+	 * (e.g. preempted). This guarantees that when a task is offcpu
+	 * its 'task_barrier' is stable.
+	 */
+	if (task_has_ghost_policy(prev)) {
+		struct ghost_status_word *prev_sw = prev->ghost.status_word;
+		WARN_ON_ONCE(!(prev_sw->flags & GHOST_SW_TASK_ONCPU));
+		ghost_sw_clear_flag(prev_sw, GHOST_SW_TASK_ONCPU);
+	}
+
+	/*
+	 * CPU is switching to a non-ghost task while a task is latched.
+	 *
+	 * Treat this like latched_task preemption because we don't know when
+	 * the CPU will be available again so no point in keeping it latched.
+	 */
+	if (rq->ghost.latched_task) {
+		/*
+		 * If 'next' was returned from pick_next_task_ghost() then
+		 * 'latched_task' must have been cleared. Conversely if
+		 * there is 'latched_task' then 'next' could not have
+		 * been returned from pick_next_task_ghost().
+		 */
+		WARN_ON_ONCE(task_has_ghost_policy(next) &&
+			     !is_agent(rq, next));
+		ghost_latched_task_preempted(rq);
+
+		/*
+		 * XXX the WARN above is susceptible to a false-negative
+		 * when pick_next_task_ghost returns the idle task. This
+		 * is not the common case but it highlights that what we
+		 * really need to check is the sched_class that produced
+		 * 'next'.
+		 */
+	}
+
+	if (task_has_ghost_policy(next) && !is_agent(rq, next))
+		ghost_task_got_oncpu(rq, next);
+
+	/*
+	 * The last task in the chain scheduled (blocked/yielded/preempted).
+	 */
+	if (rq->ghost.switchto_count < 0)
+		rq->ghost.switchto_count = 0;
+}
+
 static int bpf_wake_agent(int cpu)
 {
 	return ghost_wake_agent_on_check(cpu);
@@ -7459,6 +7588,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.ctlfd_enclave_put = ctlfd_enclave_put,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
+	.prepare_task_switch = prepare_task_switch,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,

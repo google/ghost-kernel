@@ -418,13 +418,27 @@ void ghost_wait_for_rendezvous(struct rq *rq)
 
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev)
 {
-	struct ghost_enclave *e;
+	struct ghost_enclave *this_enclave, *prev_enclave, *e;
 
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(rq != this_rq());
 
 	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	this_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	prev_enclave = prev->ghost.enclave;
+
+	/*
+	 * XXX it is possible for a running task to enter ghost into enclave X
+	 * while the cpu it is running on belongs to enclave Y. This is not
+	 * supported properly yet hence the VM_BUG_ON.
+	 */
+	VM_BUG_ON(this_enclave && prev_enclave && this_enclave != prev_enclave);
+
+	/*
+	 * 'this_enclave' may be NULL if a running task enters ghost on a cpu
+	 * that does not belong to any enclave.
+	 */
+	e = this_enclave ? this_enclave : prev_enclave;
 
 	if (e != NULL)
 		e->abi->pnt_prologue(rq, prev);
@@ -499,6 +513,35 @@ int ghost_validate_sched_attr(const struct sched_attr *attr)
 bool ghost_agent(const struct sched_attr *attr)
 {
 	return attr->sched_priority == GHOST_SCHED_AGENT_PRIO;
+}
+
+void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
+			       struct task_struct *next)
+{
+	struct ghost_enclave *this_enclave, *prev_enclave, *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	this_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	prev_enclave = prev->ghost.enclave;
+
+	/*
+	 * XXX it is possible for a running task to enter ghost into enclave X
+	 * while the cpu it is running on belongs to enclave Y. This is not
+	 * supported properly yet hence the VM_BUG_ON.
+	 */
+	VM_BUG_ON(this_enclave && prev_enclave && this_enclave != prev_enclave);
+
+	/*
+	 * 'this_enclave' may be NULL if a running task enters ghost on a cpu
+	 * that does not belong to any enclave.
+	 */
+	e = this_enclave ? this_enclave : prev_enclave;
+
+	if (e != NULL)
+		e->abi->prepare_task_switch(rq, prev, next);
 }
 
 #ifdef CONFIG_BPF
