@@ -472,14 +472,41 @@ struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
 	ghost_abi_ptr_t abi;
 	struct ghost_enclave *e = NULL;
 
+	static ghost_abi_ptr_t last_abi;
+
 	*fd_to_put = fdget(fd);
 	if (!fd_to_put->file)
 		return NULL;
 
-	for_each_abi(abi) {
+	/*
+	 * Try the ABI that we last used successfully to first do the lookup.
+	 *
+	 * In the common case of a single active enclave we avoid looping over
+	 * all the ABIs compiled into the kernel.
+	 */
+	abi = READ_ONCE(last_abi);
+	if (abi) {
 		e = abi->ctlfd_enclave_get(fd_to_put->file);
 		if (e)
+			return e;
+	}
+
+	for_each_abi(abi) {
+		e = abi->ctlfd_enclave_get(fd_to_put->file);
+		if (e) {
+			/*
+			 * Update 'last_abi' if necessary.
+			 *
+			 * N.B. multiple CPUs may race to mutate 'last_abi'
+			 * concurrently. This is okay as long as each update
+			 * is atomic (i.e. last_abi always points to a valid
+			 * abi).
+			 */
+			if (abi != READ_ONCE(last_abi))
+				WRITE_ONCE(last_abi, abi);
+
 			break;
+		}
 	}
 	return e;
 }
