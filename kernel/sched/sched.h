@@ -214,7 +214,6 @@ extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
 
 extern void ghost_tick(struct rq *rq);
-extern int64_t ghost_alloc_gtid(struct task_struct *p);
 extern void ghost_initialize_status_word(struct task_struct *p);
 extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
 			   struct task_struct *next, int switchto_flags);
@@ -2173,7 +2172,21 @@ static inline bool skip_fair_idle_balance(struct cfs_rq *cfs_rq,
 		return false;
 }
 
+/* ghost tid */
+typedef int64_t gtid_t;
+
+/*
+ * ghost tids referring to normal tasks always have a positive value:
+ * (0 | 22 bits of actual pid_t | 41 bit non-zero seqnum)
+ *
+ * The embedded 'pid' following linux terminology is actually referring
+ * to the thread id (i.e. what would be returned by syscall(__NR_gettid)).
+ */
+#define GHOST_TID_SEQNUM_BITS	41
+#define GHOST_TID_PID_BITS	22
+
 typedef const struct ghost_abi *ghost_abi_ptr_t;
+
 struct ghost_abi {
 	int version;
 	int (*abi_init)(ghost_abi_ptr_t abi);
@@ -2248,6 +2261,7 @@ void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 void ghost_cpu_idle(void);
 
 unsigned long ghost_cfs_added_load(struct rq *rq);
+int64_t ghost_alloc_gtid(struct task_struct *p);
 
 /* ghost functions in core.c */
 void ghost_agent_schedule(void);

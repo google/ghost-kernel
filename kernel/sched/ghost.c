@@ -32,9 +32,6 @@
 #include "ghost_uapi.h"
 #include "ghost.h"
 
-/* ghost tid */
-typedef int64_t gtid_t;
-
 /* The ghost_txn pointer equals NULL or &enclave->cpu_data[this_cpu].txn */
 static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
 
@@ -2403,25 +2400,6 @@ void ghost_initialize_status_word(struct task_struct *p)
 	 * status_word when discovering tasks from the status_word region.
 	 */
 	ghost_sw_set_flag(sw, GHOST_SW_F_INUSE);
-}
-
-int64_t ghost_alloc_gtid(struct task_struct *p)
-{
-	gtid_t gtid;
-	uint64_t seqnum;
-
-	static atomic64_t gtid_seqnum = ATOMIC64_INIT(0);
-
-	BUILD_BUG_ON(PID_MAX_LIMIT > (1UL << GHOST_TID_PID_BITS));
-
-	do {
-		seqnum = atomic64_add_return(1, &gtid_seqnum) &
-				((1UL << GHOST_TID_SEQNUM_BITS) - 1);
-	} while (!seqnum);
-
-	gtid = ((gtid_t)p->pid << GHOST_TID_SEQNUM_BITS) | seqnum;
-	WARN_ON_ONCE(gtid <= 0);
-	return gtid;
 }
 
 /*

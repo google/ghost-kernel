@@ -2181,6 +2181,13 @@ static struct ctl_table kern_table[] = {
 	},
 #endif /* CONFIG_SMP */
 	{
+		.procname	= "pid_max_max",
+		.data		= &pid_max_max,
+		.maxlen		= sizeof(int),
+		.mode		= 0444,
+		.proc_handler	= proc_dointvec,
+	},
+	{
 		.procname	= "pid_max",
 		.data		= &pid_max,
 		.maxlen		= sizeof (int),

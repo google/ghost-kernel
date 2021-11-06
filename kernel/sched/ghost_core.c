@@ -611,6 +611,25 @@ out:
 	return 0;
 }
 
+int64_t ghost_alloc_gtid(struct task_struct *p)
+{
+	gtid_t gtid;
+	uint64_t seqnum;
+
+	static atomic64_t gtid_seqnum = ATOMIC64_INIT(0);
+
+	BUILD_BUG_ON(PID_MAX_LIMIT != (1UL << GHOST_TID_PID_BITS));
+
+	do {
+		seqnum = atomic64_add_return(1, &gtid_seqnum) &
+				((1UL << GHOST_TID_SEQNUM_BITS) - 1);
+	} while (!seqnum);
+
+	gtid = ((gtid_t)p->pid << GHOST_TID_SEQNUM_BITS) | seqnum;
+	WARN_ON_ONCE(gtid <= 0);
+	return gtid;
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
