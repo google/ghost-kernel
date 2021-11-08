@@ -214,7 +214,6 @@ extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
 
 extern void ghost_tick(struct rq *rq);
-extern void ghost_initialize_status_word(struct task_struct *p);
 extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
 			   struct task_struct *next, int switchto_flags);
 
@@ -2200,6 +2199,7 @@ struct ghost_abi {
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
+	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
@@ -2250,6 +2250,7 @@ void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 
 bool ghost_agent(const struct sched_attr *attr);
 int ghost_validate_sched_attr(const struct sched_attr *attr);
+void ghost_copy_process_epilogue(struct task_struct *p);
 
 static inline int enclave_abi(const struct ghost_enclave *e)
 {

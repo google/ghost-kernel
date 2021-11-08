@@ -2381,7 +2381,7 @@ done:
 	return found;
 }
 
-void ghost_initialize_status_word(struct task_struct *p)
+static void ghost_initialize_status_word(struct task_struct *p)
 {
 	struct ghost_status_word *sw = p->ghost.status_word;
 
@@ -7512,6 +7512,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,
+	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,

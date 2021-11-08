@@ -657,6 +657,16 @@ int64_t ghost_alloc_gtid(struct task_struct *p)
 	return gtid;
 }
 
+void ghost_copy_process_epilogue(struct task_struct *p)
+{
+	struct ghost_enclave *e = p->ghost.enclave;
+
+	if (WARN_ON_ONCE(!e))
+		return;
+
+	e->abi->copy_process_epilogue(p);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
