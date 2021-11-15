@@ -213,7 +213,6 @@ extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
 
-extern void ghost_tick(struct rq *rq);
 extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
 			   struct task_struct *next, int switchto_flags);
 
@@ -2199,6 +2198,7 @@ struct ghost_abi {
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
+	void (*tick)(struct ghost_enclave *e, struct rq *rq);
 	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
 	int (*bpf_wake_agent)(int cpu);
@@ -2238,6 +2238,7 @@ void ghost_return_cpu(struct ghost_enclave *e, int cpu);
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
+void ghost_tick(struct rq *rq);
 
 /*
  * Helper to map an 'fd' to a 'ghost_enclave'. Must always be followed with

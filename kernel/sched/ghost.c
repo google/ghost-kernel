@@ -850,31 +850,20 @@ static bool check_runnable_timeout(struct ghost_enclave *e, struct rq *rq)
 	return ok;
 }
 
-/*
- * Called from the timer tick handler after dropping rq->lock.  Called
- * regardless of whether a ghost task is current or not.
- */
-void ghost_tick(struct rq *rq)
+static void tick_handler(struct ghost_enclave *e, struct rq *rq)
 {
-	struct ghost_enclave *e;
-
-	rcu_read_lock();
-	e = rcu_dereference(*this_cpu_ptr(&enclave));
-	if (e) {
-		if (READ_ONCE(e->commit_at_tick))
-			ghost_commit_all_greedy_txns();
-		if (!check_runnable_timeout(e, rq)) {
-			kref_get(&e->kref);
-			if (!schedule_work(&e->enclave_destroyer)) {
-				/*
-				 * Safe since it is not the last reference, due
-				 * to RCU protecting per_cpu(enclave).
-				 */
-				kref_put(&e->kref, enclave_release);
-			}
+	if (READ_ONCE(e->commit_at_tick))
+		ghost_commit_all_greedy_txns();
+	if (!check_runnable_timeout(e, rq)) {
+		kref_get(&e->kref);
+		if (!schedule_work(&e->enclave_destroyer)) {
+			/*
+			 * Safe since it is not the last reference, due
+			 * to RCU protecting per_cpu(enclave).
+			 */
+			kref_put(&e->kref, enclave_release);
 		}
 	}
-	rcu_read_unlock();
 }
 
 /*
@@ -7512,6 +7501,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,
+	.tick = tick_handler,
 	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
 	.bpf_wake_agent = bpf_wake_agent,

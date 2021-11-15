@@ -667,6 +667,27 @@ void ghost_copy_process_epilogue(struct task_struct *p)
 	e->abi->copy_process_epilogue(p);
 }
 
+/*
+ * Called from the timer tick handler after dropping rq->lock.  Called
+ * regardless of whether a ghost task is current or not.
+ */
+void ghost_tick(struct rq *rq)
+{
+	struct ghost_enclave *e;
+
+	WARN_ON_ONCE(preemptible());
+	WARN_ON_ONCE(rq != this_rq());
+
+	/*
+	 * Implicit read-side critical section since we are in hardirq context
+	 * with interrupts disabled.
+	 */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	if (e)
+		e->abi->tick(e, rq);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
