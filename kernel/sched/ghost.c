@@ -1652,7 +1652,7 @@ static struct rq *ghost_move_task(struct rq *rq, struct task_struct *next,
 	return rq;
 }
 
-int _ghost_mmap_common(struct vm_area_struct *vma, ulong mapsize)
+static int _ghost_mmap_common(struct vm_area_struct *vma, ulong mapsize)
 {
 	static const struct vm_operations_struct ghost_vm_ops = {};
 
@@ -1791,7 +1791,7 @@ static void __queue_free_work(struct work_struct *work)
 	kfree(q);
 }
 
-void _queue_free_rcu_callback(struct rcu_head *rhp)
+static void _queue_free_rcu_callback(struct rcu_head *rhp)
 {
 	struct ghost_queue *q = container_of(rhp, struct ghost_queue, rcu);
 
@@ -2491,8 +2491,8 @@ done:
  * task requires enclave to be locked whereas ungating msgs requires
  * that no locks are held).
  */
-struct task_struct *__enclave_remove_inhibited_task(struct ghost_enclave *e,
-						    gtid_t gtid)
+static struct task_struct *
+__enclave_remove_inhibited_task(struct ghost_enclave *e, gtid_t gtid)
 {
 	struct task_struct *p;
 
