@@ -742,6 +742,46 @@ void init_ghost_rq(struct ghost_rq *ghost_rq)
 	INIT_LIST_HEAD(&ghost_rq->enclave_work);
 }
 
+int ghost_sched_fork(struct task_struct *p)
+{
+	int ret;
+	struct rq *rq;
+	struct rq_flags rf;
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(!task_has_ghost_policy(p));
+
+	/*
+	 * Another task could be attempting to setsched current out of ghOSt.
+	 * To keep current's enclave valid, we synchronize with the RQ lock.
+	 */
+	rq = task_rq_lock(current, &rf);
+	if (!ghost_policy(current->policy)) {
+		task_rq_unlock(rq, current, &rf);
+		/* It's not quite ECHILD, but it'll tell us where to look. */
+		return -ECHILD;
+	}
+	e = current->ghost.enclave;
+	VM_BUG_ON(!e);
+	kref_get(&e->kref);				/* get a local ref */
+	task_rq_unlock(rq, current, &rf);
+
+	ret = e->abi->fork(e, p);
+	kref_put(&e->kref, e->abi->enclave_release);	/* release local ref */
+
+	return ret;
+}
+
+void ghost_sched_cleanup_fork(struct task_struct *p)
+{
+	struct ghost_enclave *e = p->ghost.enclave;
+
+	VM_BUG_ON(!task_has_ghost_policy(p));
+	VM_BUG_ON(!e);
+
+	e->abi->cleanup_fork(e, p);
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)

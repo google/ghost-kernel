@@ -2817,42 +2817,22 @@ out:
 	return ret;
 }
 
-int ghost_sched_fork(struct task_struct *p)
+static int _ghost_sched_fork(struct ghost_enclave *e, struct task_struct *p)
 {
-	struct rq *rq;
-	struct rq_flags rf;
-	int ret;
-	struct ghost_enclave *parent_enclave;
-
-	VM_BUG_ON(!task_has_ghost_policy(p));
-
-	/*
-	 * Another task could be attempting to setsched current out of ghOSt.
-	 * To keep current's enclave valid, we synchronize with the RQ lock.
-	 */
-	rq = task_rq_lock(current, &rf);
-	if (!ghost_policy(current->policy)) {
-		task_rq_unlock(rq, current, &rf);
-		/* It's not quite ECHILD, but it'll tell us where to look. */
-		return -ECHILD;
-	}
-	parent_enclave = current->ghost.enclave;
-	VM_BUG_ON(!parent_enclave);
-	ret = ghost_prep_task(parent_enclave, p, true);
-	task_rq_unlock(rq, current, &rf);
-
-	return ret;
+	return ghost_prep_task(e, p, true);
 }
 
-void ghost_sched_cleanup_fork(struct task_struct *p)
+static void _ghost_sched_cleanup_fork(struct ghost_enclave *e,
+				      struct task_struct *p)
 {
-	struct ghost_queue *q;
 	struct ghost_status_word *sw;
-	struct ghost_enclave *e = p->ghost.enclave;
+	struct ghost_queue *q;
 	ulong flags;
 	int error;
 
 	VM_BUG_ON(!task_has_ghost_policy(p));
+	VM_BUG_ON(e != p->ghost.enclave);
+	VM_BUG_ON(e == NULL);
 
 	/*
 	 * Clear association between 'p' and the default queue.
@@ -2861,6 +2841,15 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 	if (q != NULL) {
 		p->ghost.dst_q = NULL;
 		queue_decref(q);
+	} else {
+		/*
+		 * Although it is possible for a task to have a no 'dst_q'
+		 * this is expected only for a task that setsched's into
+		 * ghost. For the parent task to fork it must be running
+		 * which means that the enclave was functional with the
+		 * 'def_q' properly configured.
+		 */
+		WARN_ON_ONCE(true);
 	}
 
 	sw = p->ghost.status_word;
@@ -2871,10 +2860,15 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 		error = free_status_word_locked(e, sw);
 		spin_unlock_irqrestore(&e->lock, flags);
 		VM_BUG_ON(error);
+	} else {
+		WARN_ON_ONCE(true);	/* not expected */
 	}
+
 	if (e) {
 		kref_put(&e->kref, enclave_release);
 		p->ghost.enclave = NULL;
+	} else {
+		WARN_ON_ONCE(true);	/* not expected */
 	}
 }
 
@@ -7465,6 +7459,8 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.ctlfd_enclave_get = ctlfd_enclave_get,
 	.ctlfd_enclave_put = ctlfd_enclave_put,
 	.setscheduler = _ghost_setscheduler,
+	.fork = _ghost_sched_fork,
+	.cleanup_fork = _ghost_sched_cleanup_fork,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,

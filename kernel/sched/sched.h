@@ -204,10 +204,6 @@ struct ghost_enclave {
 #endif
 };
 
-/* In kernel/sched/ghost.c */
-extern int ghost_sched_fork(struct task_struct *p);
-extern void ghost_sched_cleanup_fork(struct task_struct *p);
-
 static inline void sched_ghost_entity_init(struct task_struct *p)
 {
 	memset(&p->ghost, 0, sizeof(p->ghost));
@@ -2190,6 +2186,8 @@ struct ghost_abi {
 			    const struct sched_attr *attr,
 			    struct ghost_enclave *new_e,
 			    int *reset_on_fork);
+	int (*fork)(struct ghost_enclave *e, struct task_struct *p);
+	void (*cleanup_fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
@@ -2250,6 +2248,8 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		       const struct sched_attr *attr,
 		       struct ghost_enclave *new_e,
 		       int *reset_on_fork);
+int ghost_sched_fork(struct task_struct *p);
+void ghost_sched_cleanup_fork(struct task_struct *p);
 
 bool ghost_agent(const struct sched_attr *attr);
 int ghost_validate_sched_attr(const struct sched_attr *attr);
