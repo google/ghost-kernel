@@ -2904,37 +2904,15 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
  * The most reasonable fix for all of this is to directly call
  * ghost_fdput_enclave() from __sched_setscheduler().
  */
-int ghost_setscheduler(struct task_struct *p, struct rq *rq,
-		       const struct sched_attr *attr,
-		       struct ghost_enclave *new_e,
-		       int *reset_on_fork)
+static int _ghost_setscheduler(struct task_struct *p, struct rq *rq,
+			       const struct sched_attr *attr,
+			       struct ghost_enclave *new_e,
+			       int *reset_on_fork)
 {
-	int oldpolicy = p->policy;
-	int newpolicy = attr->sched_policy;
 	int ret;
 
-	if (WARN_ON_ONCE(!ghost_policy(oldpolicy) && !ghost_policy(newpolicy)))
-		return -EINVAL;
-
-	/*
-	 * If the process is dying, finish_task_switch will call task_dead
-	 * *after* releasing the rq lock.  We don't know if task_dead was called
-	 * yet, and it will be called without holding any locks.  This can break
-	 * ghost for both task scheduling into ghost and out of ghost.
-	 * - If we're entering ghost, but already ran task_dead from our old
-	 *   sched class, then we'll never run ghost_task_dead.
-	 * - If we're leaving ghost, we need to run either ghost_task_dead xor
-	 *   setscheduler from ghost, but we have no nice way of knowing if we
-	 *   already ran ghost_task_dead.
-	 */
-	if (p->state == TASK_DEAD)
-		return -ESRCH;
-	/* Cannot change attributes for a ghost task after creation. */
-	if (oldpolicy == newpolicy)
-		return -EPERM;
-
 	/* Task 'p' is departing the ghost sched class. */
-	if (ghost_policy(oldpolicy)) {
+	if (ghost_policy(p->policy)) {
 		/*
 		 * Don't allow an agent to move out of the ghost sched_class.
 		 * There is no use case for this and more importantly we don't
@@ -2948,7 +2926,7 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		return 0;
 	}
 
-	if (!new_e)
+	if (WARN_ON_ONCE(!new_e))
 		return -EBADF;
 
 	if (ghost_agent(attr)) {
@@ -7486,6 +7464,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.enclave_release = enclave_release,
 	.ctlfd_enclave_get = ctlfd_enclave_get,
 	.ctlfd_enclave_put = ctlfd_enclave_put,
+	.setscheduler = _ghost_setscheduler,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,

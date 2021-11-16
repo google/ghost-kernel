@@ -545,6 +545,47 @@ bool ghost_agent(const struct sched_attr *attr)
 	return attr->sched_priority == GHOST_SCHED_AGENT_PRIO;
 }
 
+int ghost_setscheduler(struct task_struct *p, struct rq *rq,
+		       const struct sched_attr *attr,
+		       struct ghost_enclave *new_e,
+		       int *reset_on_fork)
+{
+	struct ghost_enclave *e;
+	int oldpolicy = p->policy;
+	int newpolicy = attr->sched_policy;
+
+	if (WARN_ON_ONCE(!ghost_policy(oldpolicy) && !ghost_policy(newpolicy)))
+		return -EINVAL;
+
+	/*
+	 * If the process is dying, finish_task_switch will call task_dead
+	 * *after* releasing the rq lock.  We don't know if task_dead was called
+	 * yet, and it will be called without holding any locks.  This can break
+	 * ghost for both task scheduling into ghost and out of ghost.
+	 * - If we're entering ghost, but already ran task_dead from our old
+	 *   sched class, then we'll never run ghost_task_dead.
+	 * - If we're leaving ghost, we need to run either ghost_task_dead xor
+	 *   setscheduler from ghost, but we have no nice way of knowing if we
+	 *   already ran ghost_task_dead.
+	 */
+	if (p->state == TASK_DEAD)
+		return -ESRCH;
+
+	/* Cannot change attributes for a ghost task after creation. */
+	if (oldpolicy == newpolicy)
+		return -EPERM;
+
+	if (ghost_policy(oldpolicy))
+		e = p->ghost.enclave;
+	else
+		e = new_e;
+
+	if (!e)
+		return -EBADF;
+
+	return e->abi->setscheduler(p, rq, attr, new_e, reset_on_fork);
+}
+
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next)
 {
