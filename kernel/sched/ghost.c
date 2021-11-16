@@ -373,12 +373,6 @@ static void submit_enclave_work(struct ghost_enclave *e, struct rq *rq,
 	queue_balance_callback(rq, &rq->ghost.ew_head, __do_enclave_work);
 }
 
-void init_ghost_rq(struct ghost_rq *ghost_rq)
-{
-	INIT_LIST_HEAD(&ghost_rq->tasks);
-	INIT_LIST_HEAD(&ghost_rq->enclave_work);
-}
-
 static inline gtid_t gtid(struct task_struct *p)
 {
 	return p->gtid;

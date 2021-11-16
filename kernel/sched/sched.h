@@ -205,7 +205,6 @@ struct ghost_enclave {
 };
 
 /* In kernel/sched/ghost.c */
-extern void init_ghost_rq(struct ghost_rq *ghost_rq);
 extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 			      const struct sched_attr *attr,
 			      struct ghost_enclave *new_e,
@@ -2264,6 +2263,7 @@ void ghost_cpu_idle(void);
 
 unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);
+void init_ghost_rq(struct ghost_rq *ghost_rq);
 
 /* ghost functions in core.c */
 void ghost_agent_schedule(void);

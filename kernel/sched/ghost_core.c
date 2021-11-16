@@ -688,6 +688,19 @@ void ghost_tick(struct rq *rq)
 		e->abi->tick(e, rq);
 }
 
+/*
+ * TODO(multi-enclave):
+ * This should be done entirely within an ABI when a cpu is assigned
+ * to the corresponding enclave. However because we allow tasks to enter
+ * ghost on on arbitrary cpus (e.g. outside an enclave) then 'rq->ghost'
+ * must be properly initialized on those cpus as well.
+ */
+void init_ghost_rq(struct ghost_rq *ghost_rq)
+{
+	INIT_LIST_HEAD(&ghost_rq->tasks);
+	INIT_LIST_HEAD(&ghost_rq->enclave_work);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
