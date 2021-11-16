@@ -2204,6 +2204,7 @@ struct ghost_abi {
 	void (*tick)(struct ghost_enclave *e, struct rq *rq);
 	void (*switchto)(struct rq *rq, struct task_struct *prev,
 			 struct task_struct *next, int switchto_flags);
+	void (*commit_greedy_txn)(int cpu);
 	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
 	int (*bpf_wake_agent)(int cpu);

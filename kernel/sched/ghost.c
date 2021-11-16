@@ -5582,9 +5582,13 @@ static void ghost_commit_pending_txn(int where)
 	put_cpu();
 }
 
-extern void ghost_commit_greedy_txn(void)
+static void _commit_greedy_txn(int cpu)
 {
-	ghost_commit_pending_txn(0);	/* Commit a greedy pending txn */
+	WARN_ON_ONCE(preemptible());
+
+	rcu_read_lock();
+	_ghost_commit_pending_txn(cpu, /*where=*/0);
+	rcu_read_unlock();
 }
 
 void ghost_commit_all_greedy_txns(void)
@@ -7455,6 +7459,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.prepare_task_switch = prepare_task_switch,
 	.tick = tick_handler,
 	.switchto = _ghost_switchto,
+	.commit_greedy_txn = _commit_greedy_txn,
 	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
 	.bpf_wake_agent = bpf_wake_agent,

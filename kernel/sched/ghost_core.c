@@ -782,6 +782,21 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 	e->abi->cleanup_fork(e, p);
 }
 
+void ghost_commit_greedy_txn(void)
+{
+	struct ghost_enclave *e;
+	int cpu = get_cpu();
+
+	VM_BUG_ON(preemptible());
+
+	/* Implicit read-side critical section due to disabled preemption */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu));
+	if (e)
+		e->abi->commit_greedy_txn(cpu);
+
+	put_cpu();
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
