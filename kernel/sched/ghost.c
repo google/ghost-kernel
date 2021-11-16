@@ -6208,15 +6208,9 @@ SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2,
 #define SYS_SWITCHTO_SWITCH_FLAGS_LAZY_EXEC_CLOCK	0x10000
 #endif
 
-void ghost_switchto(struct rq *rq, struct task_struct *prev,
-		    struct task_struct *next, int switchto_flags)
+static void _ghost_switchto(struct rq *rq, struct task_struct *prev,
+			    struct task_struct *next, int switchto_flags)
 {
-	lockdep_assert_held(&rq->lock);
-	VM_BUG_ON(prev != rq->curr);
-	VM_BUG_ON(prev->state == TASK_RUNNING);
-	VM_BUG_ON(next->state == TASK_RUNNING);
-	VM_BUG_ON(!ghost_class(prev->sched_class));
-	VM_BUG_ON(!ghost_class(next->sched_class));
 	VM_BUG_ON(rq->ghost.check_prev_preemption);
 	VM_BUG_ON(rq->ghost.switchto_count < 0);
 
@@ -7496,6 +7490,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.pnt_prologue = pnt_prologue,
 	.prepare_task_switch = prepare_task_switch,
 	.tick = tick_handler,
+	.switchto = _ghost_switchto,
 	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
 	.bpf_wake_agent = bpf_wake_agent,

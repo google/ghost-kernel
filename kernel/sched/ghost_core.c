@@ -701,6 +701,26 @@ void init_ghost_rq(struct ghost_rq *ghost_rq)
 	INIT_LIST_HEAD(&ghost_rq->enclave_work);
 }
 
+#ifdef CONFIG_SWITCHTO_API
+void ghost_switchto(struct rq *rq, struct task_struct *prev,
+		    struct task_struct *next, int switchto_flags)
+{
+	struct ghost_enclave *e;
+
+	lockdep_assert_held(&rq->lock);
+	VM_BUG_ON(prev != rq->curr);
+	VM_BUG_ON(prev->state == TASK_RUNNING);
+	VM_BUG_ON(next->state == TASK_RUNNING);
+	VM_BUG_ON(!ghost_class(prev->sched_class));
+	VM_BUG_ON(!ghost_class(next->sched_class));
+	VM_BUG_ON(prev->ghost.enclave != next->ghost.enclave);
+	VM_BUG_ON(!next->ghost.enclave);
+
+	e = next->ghost.enclave;
+	e->abi->switchto(rq, prev, next, switchto_flags);
+}
+#endif
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 

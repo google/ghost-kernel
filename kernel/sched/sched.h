@@ -212,9 +212,6 @@ extern int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 extern int ghost_sched_fork(struct task_struct *p);
 extern void ghost_sched_cleanup_fork(struct task_struct *p);
 
-extern void ghost_switchto(struct rq *rq, struct task_struct *prev,
-			   struct task_struct *next, int switchto_flags);
-
 static inline void sched_ghost_entity_init(struct task_struct *p)
 {
 	memset(&p->ghost, 0, sizeof(p->ghost));
@@ -2198,6 +2195,8 @@ struct ghost_abi {
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
 	void (*tick)(struct ghost_enclave *e, struct rq *rq);
+	void (*switchto)(struct rq *rq, struct task_struct *prev,
+			 struct task_struct *next, int switchto_flags);
 	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
 	int (*bpf_wake_agent)(int cpu);
@@ -2264,6 +2263,11 @@ void ghost_cpu_idle(void);
 unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);
 void init_ghost_rq(struct ghost_rq *ghost_rq);
+
+#ifdef CONFIG_SWITCHTO_API
+void ghost_switchto(struct rq *rq, struct task_struct *prev,
+		    struct task_struct *next, int switchto_flags);
+#endif
 
 /* ghost functions in core.c */
 void ghost_agent_schedule(void);
