@@ -385,17 +385,6 @@ static inline bool on_ghost_rq(struct rq *rq, struct task_struct *p)
 	return !list_empty(&p->ghost.run_list);
 }
 
-bool is_agent(struct rq *rq, struct task_struct *p)
-{
-	if (rq->ghost.agent == p) {
-		VM_BUG_ON(!p->ghost.agent);
-		return true;
-	}
-
-	VM_BUG_ON(p->ghost.agent);
-	return false;
-}
-
 static inline bool ghost_can_schedule(struct rq *rq, gtid_t gtid)
 {
 	const struct sched_class *class = rq->curr->sched_class;

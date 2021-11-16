@@ -2095,7 +2095,16 @@ static inline bool ghost_class(const struct sched_class *class)
 	return class == &ghost_sched_class;
 }
 
-bool is_agent(struct rq *rq, struct task_struct *p);
+static inline bool is_agent(struct rq *rq, struct task_struct *p)
+{
+	if (rq->ghost.agent == p) {
+		VM_BUG_ON(!p->ghost.agent);
+		return true;
+	}
+
+	VM_BUG_ON(p->ghost.agent);
+	return false;
+}
 
 /*
  * Contents of rq->ghost.rendezvous field: <sign|cpu_num|poison|counter>
