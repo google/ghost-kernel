@@ -599,7 +599,7 @@ static void _prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
 	 */
 }
 
-static void switched_to_ghost(struct rq *rq, struct task_struct *p)
+static void _switched_to_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_status_word *status_word = p->ghost.status_word;
 
@@ -1575,7 +1575,7 @@ done:
 DEFINE_SCHED_CLASS(ghost) = {
 	.update_curr		= update_curr_ghost,	/* ghost_core.c */
 	.prio_changed		= prio_changed_ghost,	/* ghost_core.c */
-	.switched_to		= switched_to_ghost,
+	.switched_to		= switched_to_ghost,	/* ghost_core.c */
 	.switched_from		= switched_from_ghost,
 	.task_dead		= task_dead_ghost,
 	.dequeue_task		= dequeue_task_ghost,
@@ -7162,7 +7162,7 @@ static void prepare_task_switch(struct rq *rq, struct task_struct *prev,
 	 * sched_setscheduler(2)) while the rq->lock is dropped in one of the
 	 * pick_next_task handlers (e.g. during CFS idle load balancing).
 	 *
-	 * It is not possible to distinguish this in switched_to_ghost() so
+	 * It is not possible to distinguish this in _switched_to_ghost() so
 	 * we resolve 'prev->ghost.new_task' here. Failing to do this has
 	 * dire consequences if 'prev' is runnable since it will languish
 	 * in the kernel forever (in contrast to a blocked task there is
@@ -7460,5 +7460,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	/* ghost_sched_class callbacks */
 	.update_curr = _update_curr_ghost,
 	.prio_changed = _prio_changed_ghost,
+	.switched_to = _switched_to_ghost,
 };
 
