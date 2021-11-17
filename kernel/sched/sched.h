@@ -2199,6 +2199,7 @@ struct ghost_abi {
 	void (*cleanup_fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
+	struct task_struct *(*pick_next_ghost_agent)(struct rq *rq);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
 	void (*tick)(struct ghost_enclave *e, struct rq *rq);

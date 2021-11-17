@@ -1594,25 +1594,6 @@ DEFINE_SCHED_CLASS(ghost) = {
 #endif
 };
 
-static int balance_agent(struct rq *rq, struct task_struct *prev,
-			 struct rq_flags *rf)
-{
-	return 0;
-}
-
-/*
- * An interstitial sched class that operates below the stop_sched_class. It
- * enables returning to an agent at the highest priority when the agent is about
- * to lose its CPU to another sched class. This allows the agent to transition
- * to another CPU before giving up its CPU.
- */
-DEFINE_SCHED_CLASS(ghost_agent) = {
-	.pick_next_task		= pick_next_ghost_agent,
-#ifdef CONFIG_SMP
-	.balance		= balance_agent,
-#endif
-};
-
 /*
  * Migrate 'next' (if necessary) in preparation to run it on 'cpu'.
  *
@@ -7460,6 +7441,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.cleanup_fork = _ghost_sched_cleanup_fork,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
+	.pick_next_ghost_agent = pick_next_ghost_agent,
 	.prepare_task_switch = prepare_task_switch,
 	.tick = tick_handler,
 	.switchto = _ghost_switchto,

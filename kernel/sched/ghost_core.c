@@ -823,6 +823,42 @@ void ghost_timerfd_triggered(struct __kernel_timerfd_ghost *ktfd)
 	rcu_read_unlock();
 }
 
+static struct task_struct *pick_next_ghost_agent(struct rq *rq)
+{
+	struct task_struct *next;
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* Implicit read-side critical section due to disabled preemption */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	if (e)
+		next = e->abi->pick_next_ghost_agent(rq);
+	else
+		next = NULL;
+
+	return next;
+}
+
+static int balance_agent(struct rq *rq, struct task_struct *prev,
+			 struct rq_flags *rf)
+{
+	return 0;
+}
+
+/*
+ * An interstitial sched class that operates below the stop_sched_class. It
+ * enables returning to an agent at the highest priority when the agent is about
+ * to lose its CPU to another sched class. This allows the agent to transition
+ * to another CPU before giving up its CPU.
+ */
+DEFINE_SCHED_CLASS(ghost_agent) = {
+	.pick_next_task		= pick_next_ghost_agent,
+#ifdef CONFIG_SMP
+	.balance		= balance_agent,
+#endif
+};
 
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
