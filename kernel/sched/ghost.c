@@ -632,7 +632,7 @@ static void _switched_to_ghost(struct rq *rq, struct task_struct *p)
 	}
 }
 
-static void switched_from_ghost(struct rq *rq, struct task_struct *p)
+static void _switched_from_ghost(struct rq *rq, struct task_struct *p)
 {
 	/*
 	 * A running task can be switched into ghost while it is executing
@@ -1576,7 +1576,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.update_curr		= update_curr_ghost,	/* ghost_core.c */
 	.prio_changed		= prio_changed_ghost,	/* ghost_core.c */
 	.switched_to		= switched_to_ghost,	/* ghost_core.c */
-	.switched_from		= switched_from_ghost,
+	.switched_from		= switched_from_ghost,	/* ghost_core.c */
 	.task_dead		= task_dead_ghost,
 	.dequeue_task		= dequeue_task_ghost,
 	.put_prev_task		= put_prev_task_ghost,
@@ -7461,5 +7461,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.update_curr = _update_curr_ghost,
 	.prio_changed = _prio_changed_ghost,
 	.switched_to = _switched_to_ghost,
+	.switched_from = _switched_from_ghost,
 };
 

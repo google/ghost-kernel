@@ -918,6 +918,20 @@ void switched_to_ghost(struct rq *rq, struct task_struct *p)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
+void switched_from_ghost(struct rq *rq, struct task_struct *p)
+{
+	struct ghost_enclave *e;
+
+	lockdep_assert_held(&p->pi_lock);
+	lockdep_assert_held(&rq->lock);
+
+	e = p->ghost.enclave;
+	if (e)
+		e->abi->switched_from(rq, p);
+	else
+		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)

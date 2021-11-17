@@ -2226,12 +2226,14 @@ struct ghost_abi {
 	void (*update_curr)(struct rq *rq);
 	void (*prio_changed)(struct rq *rq, struct task_struct *p, int old);
 	void (*switched_to)(struct rq *rq, struct task_struct *p);
+	void (*switched_from)(struct rq *rq, struct task_struct *p);
 };
 
 /* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
 void update_curr_ghost(struct rq *rq);
 void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old);
 void switched_to_ghost(struct rq *rq, struct task_struct *p);
+void switched_from_ghost(struct rq *rq, struct task_struct *p);
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\
