@@ -2199,7 +2199,6 @@ struct ghost_abi {
 	void (*cleanup_fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*wait_for_rendezvous)(struct rq *rq);
 	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
-	struct task_struct *(*pick_next_ghost_agent)(struct rq *rq);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
 	void (*tick)(struct ghost_enclave *e, struct rq *rq);
@@ -2219,7 +2218,16 @@ struct ghost_abi {
 			       int prog_type, int attach_type);
 	void (*bpf_link_detach)(struct ghost_enclave *e, struct bpf_prog *prog,
 			        int prog_type, int attach_type);
+
+	/* ghost_agent_sched_class callbacks */
+	struct task_struct *(*pick_next_ghost_agent)(struct rq *rq);
+
+	/* ghost_sched_class callbacks */
+	void (*update_curr)(struct rq *rq);
 };
+
+/* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
+void update_curr_ghost(struct rq *rq);
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\

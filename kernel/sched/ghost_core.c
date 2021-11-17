@@ -860,6 +860,36 @@ DEFINE_SCHED_CLASS(ghost_agent) = {
 #endif
 };
 
+void update_curr_ghost(struct rq *rq)
+{
+	struct ghost_enclave *rq_enclave, *curr_enclave, *e;
+
+	VM_BUG_ON(preemptible());
+	lockdep_assert_held(&rq->lock);
+
+	/* Implicit read-side critical section due to disabled preemption */
+	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	if (ghost_class(rq->curr->sched_class))
+		curr_enclave = rq->curr->ghost.enclave;
+	else
+		curr_enclave = NULL;
+
+	/*
+	 * XXX it is possible for a running task to enter ghost into enclave X
+	 * while the cpu it is running on belongs to enclave Y. This is not
+	 * supported properly yet hence the VM_BUG_ON.
+	 */
+	VM_BUG_ON(rq_enclave && curr_enclave && rq_enclave != curr_enclave);
+
+	/*
+	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
+	 * that does not belong to any enclave.
+	 */
+	e = rq_enclave ? rq_enclave : curr_enclave;
+	if (e)
+		e->abi->update_curr(rq);
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)

@@ -1573,7 +1573,7 @@ done:
 }
 
 DEFINE_SCHED_CLASS(ghost) = {
-	.update_curr		= _update_curr_ghost,
+	.update_curr		= update_curr_ghost,	/* ghost_core.c */
 	.prio_changed		= prio_changed_ghost,
 	.switched_to		= switched_to_ghost,
 	.switched_from		= switched_from_ghost,
@@ -7441,7 +7441,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.cleanup_fork = _ghost_sched_cleanup_fork,
 	.wait_for_rendezvous = wait_for_rendezvous,
 	.pnt_prologue = pnt_prologue,
-	.pick_next_ghost_agent = pick_next_ghost_agent,
 	.prepare_task_switch = prepare_task_switch,
 	.tick = tick_handler,
 	.switchto = _ghost_switchto,
@@ -7454,5 +7453,11 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.bpf_link_attach = bpf_link_attach,
 	.bpf_link_detach = bpf_link_detach,
+
+	/* ghost_agent_sched_class callbacks */
+	.pick_next_ghost_agent = pick_next_ghost_agent,
+
+	/* ghost_sched_class callbacks */
+	.update_curr = _update_curr_ghost,
 };
 
