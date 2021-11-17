@@ -580,7 +580,7 @@ static void __update_curr_ghost(struct rq *rq, bool update_sw)
 		WRITE_ONCE(sw->runtime, curr->se.sum_exec_runtime);
 }
 
-static void update_curr_ghost(struct rq *rq)
+static void _update_curr_ghost(struct rq *rq)
 {
 	__update_curr_ghost(rq, true);
 }
@@ -681,16 +681,16 @@ static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 
 	/*
 	 * A task is accumulating cputime only when it is oncpu. Thus it is
-	 * useless to call update_curr_ghost for a task that is 'on_rq' but
+	 * useless to call _update_curr_ghost for a task that is 'on_rq' but
 	 * is not running (in this case we'll just update the cputime of
 	 * whatever task happens to be oncpu).
 	 *
 	 * Ordinarily we wouldn't care but we routinely dequeue_task_ghost()
 	 * when migrating a task via ghost_move_task() during txn commit so
-	 * we call update_curr_ghost() only if 'p' is actually running.
+	 * we call _update_curr_ghost() only if 'p' is actually running.
 	 */
 	if (task_current(rq, p))
-		update_curr_ghost(rq);
+		_update_curr_ghost(rq);
 
 	BUG_ON(rq->ghost.ghost_nr_running <= 0);
 	rq->ghost.ghost_nr_running--;
@@ -735,7 +735,7 @@ static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 
 static void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 {
-	update_curr_ghost(rq);
+	_update_curr_ghost(rq);
 }
 
 static void
@@ -1573,7 +1573,7 @@ done:
 }
 
 DEFINE_SCHED_CLASS(ghost) = {
-	.update_curr		= update_curr_ghost,
+	.update_curr		= _update_curr_ghost,
 	.prio_changed		= prio_changed_ghost,
 	.switched_to		= switched_to_ghost,
 	.switched_from		= switched_from_ghost,
@@ -4524,15 +4524,15 @@ static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
 
-       /*
-        * When TASK_PREEMPTED is produced before returning from pick_next_task
-        * (e.g. via pick_next_ghost_agent) we don't have an up-to-date runtime
-        * since put_prev_task() hasn't been called yet.
-        *
-        * Therefore if 'p == rq->curr' we must do update_curr_ghost() by hand.
-        */
-       if (p == rq->curr)
-               update_curr_ghost(rq);
+	/*
+	 * When TASK_PREEMPTED is produced before returning from pick_next_task
+	 * (e.g. via pick_next_ghost_agent) we don't have an up-to-date runtime
+	 * since put_prev_task() hasn't been called yet.
+	 *
+	 * Therefore if 'p == rq->curr' we must do _update_curr_ghost() by hand.
+	 */
+	if (p == rq->curr)
+		_update_curr_ghost(rq);
 
 	/*
 	 * If a latched task was preempted then by definition it was not
@@ -4587,9 +4587,9 @@ static void _ghost_task_new(struct rq *rq, struct task_struct *p, bool runnable)
 
 	enclave_add_task(p->ghost.enclave, p);
 
-       /* See explanation in ghost_task_preempted() */
-       if (p == rq->curr)
-               update_curr_ghost(rq);
+	/* See explanation in ghost_task_preempted() */
+	if (p == rq->curr)
+		_update_curr_ghost(rq);
 
 	task_deliver_msg_task_new(rq, p, runnable);
 }
@@ -4604,9 +4604,9 @@ static void ghost_task_yield(struct rq *rq, struct task_struct *p)
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(task_rq(p) != rq);
 
-       /* See explanation in ghost_task_preempted() */
-       if (p == rq->curr)
-               update_curr_ghost(rq);
+	/* See explanation in ghost_task_preempted() */
+	if (p == rq->curr)
+		update_curr_ghost(rq);
 
 	task_deliver_msg_yield(rq, p);
 }
@@ -6167,7 +6167,7 @@ static void _ghost_switchto(struct rq *rq, struct task_struct *prev,
 	if (switchto_flags & SYS_SWITCHTO_SWITCH_FLAGS_LAZY_EXEC_CLOCK) {
 		next->se.exec_start = prev->se.exec_start;
 	} else {
-		update_curr_ghost(rq);
+		_update_curr_ghost(rq);
 		next->se.exec_start = rq_clock_task(rq);
 	}
 
