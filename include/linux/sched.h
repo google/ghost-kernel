@@ -588,7 +588,6 @@ struct sched_dl_entity {
 struct ghost_queue;
 struct ghost_status_word;
 struct ghost_enclave;
-struct timerfd_ghost;
 
 struct sched_ghost_entity {
 	struct list_head run_list;
@@ -643,8 +642,14 @@ struct sched_ghost_entity {
 	struct rcu_head rcu;
 };
 
+struct __kernel_timerfd_ghost {
+	bool enabled;
+	int cpu;
+	uint64_t cookie;
+};
+
 extern void ghost_commit_greedy_txn(void);
-extern void ghost_timerfd_triggered(struct timerfd_ghost *timer);
+extern void ghost_timerfd_triggered(struct __kernel_timerfd_ghost *timer);
 
 #endif
 

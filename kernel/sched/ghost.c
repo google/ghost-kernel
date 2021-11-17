@@ -6037,7 +6037,8 @@ static int ghost_timerfd_validate(struct timerfd_ghost *timerfd_ghost)
 
 /* fs/timerfd.c */
 int do_timerfd_settime(int ufd, int flags, const struct itimerspec64 *new,
-		       struct itimerspec64 *old, struct timerfd_ghost *tfdl);
+		       struct itimerspec64 *old,
+		       struct __kernel_timerfd_ghost *ktfd);
 
 static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 {
@@ -6049,6 +6050,7 @@ static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 	struct __kernel_itimerspec *otmr;
 	struct timerfd_ghost timerfd_ghost;
 	struct ghost_ioc_timerfd_settime settime_data;
+	struct __kernel_timerfd_ghost ktfd_ghost;
 
 	if (copy_from_user(&settime_data, arg,
 			   sizeof(struct ghost_ioc_timerfd_settime)))
@@ -6067,7 +6069,11 @@ static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 	if (ret)
 		return ret;
 
-	ret = do_timerfd_settime(timerfd, flags, &new, &old, &timerfd_ghost);
+	ktfd_ghost.enabled = timerfd_ghost.flags & TIMERFD_GHOST_ENABLED;
+	ktfd_ghost.cpu = timerfd_ghost.cpu;
+	ktfd_ghost.cookie = timerfd_ghost.cookie;
+
+	ret = do_timerfd_settime(timerfd, flags, &new, &old, &ktfd_ghost);
 	if (ret)
 		return ret;
 
@@ -6077,12 +6083,10 @@ static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 	return ret;
 }
 
-/* Called from timerfd_triggered() on timer expiry */
-void ghost_timerfd_triggered(struct timerfd_ghost *timerfd_ghost)
+static void _ghost_timerfd_triggered(int cpu, uint64_t cookie)
 {
 	struct rq *rq;
 	struct rq_flags rf;
-	int cpu = timerfd_ghost->cpu;
 
 	if (WARN_ON_ONCE(cpu < 0 || cpu >= nr_cpu_ids || !cpu_online(cpu)))
 		return;
@@ -6090,7 +6094,7 @@ void ghost_timerfd_triggered(struct timerfd_ghost *timerfd_ghost)
 	rq = cpu_rq(cpu);
 	rq_lock_irqsave(rq, &rf);
 
-	if (cpu_deliver_timer_expired(rq, timerfd_ghost->cookie))
+	if (cpu_deliver_timer_expired(rq, cookie))
 		ghost_wake_agent_on(agent_target_cpu(rq));
 
 	rq_unlock_irqrestore(rq, &rf);
@@ -7462,6 +7466,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.commit_greedy_txn = _commit_greedy_txn,
 	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
+	.timerfd_triggered = _ghost_timerfd_triggered,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,

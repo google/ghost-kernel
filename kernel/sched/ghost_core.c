@@ -797,6 +797,33 @@ void ghost_commit_greedy_txn(void)
 	put_cpu();
 }
 
+/* Called from timerfd_triggered() on timer expiry */
+void ghost_timerfd_triggered(struct __kernel_timerfd_ghost *ktfd)
+{
+	int cpu = ktfd->cpu;
+	struct ghost_enclave *e;
+
+	if (WARN_ON_ONCE(cpu < 0 || cpu >= nr_cpu_ids || !cpu_online(cpu)))
+		return;
+
+	if (WARN_ON_ONCE(!ktfd->enabled))
+		return;
+
+	/*
+	 * XXX the enclave lookup doesn't handle cpus moving out of enclaves
+	 * properly (for e.g. a timerfd might be triggered on a cpu that is
+	 * not associated with the enclave).
+	 */
+	rcu_read_lock();
+	e = rcu_dereference(per_cpu(enclave, cpu));
+	if (e)
+		e->abi->timerfd_triggered(cpu, ktfd->cookie);
+	else
+		WARN_ONCE(true, "cpu %d has no enclave", cpu);
+	rcu_read_unlock();
+}
+
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
