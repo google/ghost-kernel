@@ -585,7 +585,7 @@ static void _update_curr_ghost(struct rq *rq)
 	__update_curr_ghost(rq, true);
 }
 
-static void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
+static void _prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
 {
 	/*
 	 * XXX produce MSG_TASK_PRIO_CHANGE into p->ghost.dst_q.
@@ -1574,7 +1574,7 @@ done:
 
 DEFINE_SCHED_CLASS(ghost) = {
 	.update_curr		= update_curr_ghost,	/* ghost_core.c */
-	.prio_changed		= prio_changed_ghost,
+	.prio_changed		= prio_changed_ghost,	/* ghost_core.c */
 	.switched_to		= switched_to_ghost,
 	.switched_from		= switched_from_ghost,
 	.task_dead		= task_dead_ghost,
@@ -7459,5 +7459,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 
 	/* ghost_sched_class callbacks */
 	.update_curr = _update_curr_ghost,
+	.prio_changed = _prio_changed_ghost,
 };
 
