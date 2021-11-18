@@ -2240,6 +2240,7 @@ struct ghost_abi {
 	void (*yield_task)(struct rq *rq);
 #ifdef CONFIG_SMP
 	int (*select_task_rq)(struct task_struct *p, int cpu, int wake_flags);
+	void (*task_woken)(struct rq *rq, struct task_struct *p);
 #endif
 };
 
@@ -2260,6 +2261,7 @@ void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 void yield_task_ghost(struct rq *rq);
 #ifdef CONFIG_SMP
 int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags);
+void task_woken_ghost(struct rq *rq, struct task_struct *p);
 #endif
 
 #define DEFINE_GHOST_ABI(name) \

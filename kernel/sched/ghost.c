@@ -1542,7 +1542,7 @@ static void set_cpus_allowed_ghost(struct task_struct *p,
 	set_cpus_allowed_common(p, newmask, flags);
 }
 
-static void task_woken_ghost(struct rq *rq, struct task_struct *p)
+static void _task_woken_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_status_word *sw = p->ghost.status_word;
 
@@ -1584,7 +1584,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 #ifdef CONFIG_SMP
 	.balance		= balance_ghost,
 	.select_task_rq		= select_task_rq_ghost,	/* ghost_core.c */
-	.task_woken		= task_woken_ghost,
+	.task_woken		= task_woken_ghost,	/* ghost_core.c */
 	.set_cpus_allowed	= set_cpus_allowed_ghost,
 #endif
 };
@@ -7468,6 +7468,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.yield_task = _yield_task_ghost,
 #ifdef CONFIG_SMP
 	.select_task_rq = _select_task_rq_ghost,
+	.task_woken = _task_woken_ghost,
 #endif
 };
 
