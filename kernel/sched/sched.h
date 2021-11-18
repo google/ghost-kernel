@@ -2241,6 +2241,8 @@ struct ghost_abi {
 #ifdef CONFIG_SMP
 	int (*select_task_rq)(struct task_struct *p, int cpu, int wake_flags);
 	void (*task_woken)(struct rq *rq, struct task_struct *p);
+	void (*set_cpus_allowed)(struct task_struct *p,
+				 const struct cpumask *newmask, u32 flags);
 #endif
 };
 
@@ -2262,6 +2264,8 @@ void yield_task_ghost(struct rq *rq);
 #ifdef CONFIG_SMP
 int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags);
 void task_woken_ghost(struct rq *rq, struct task_struct *p);
+void set_cpus_allowed_ghost(struct task_struct *p,
+			    const struct cpumask *newmask, u32 flags);
 #endif
 
 #define DEFINE_GHOST_ABI(name) \

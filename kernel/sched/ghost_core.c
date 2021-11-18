@@ -1247,6 +1247,20 @@ void task_woken_ghost(struct rq *rq, struct task_struct *p)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
+void set_cpus_allowed_ghost(struct task_struct *p,
+			    const struct cpumask *newmask, u32 flags)
+{
+	struct ghost_enclave *e;
+
+	lockdep_assert_held(&p->pi_lock);
+
+	e = p->ghost.enclave;
+	if (e)
+		e->abi->set_cpus_allowed(p, newmask, flags);
+	else
+		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
