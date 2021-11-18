@@ -1167,6 +1167,40 @@ void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 			  p->pid, p->comm, cpu_of(rq));
 }
 
+void yield_task_ghost(struct rq *rq)
+{
+	struct task_struct *p = current;
+	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+	lockdep_assert_held(&rq->lock);
+
+	/* Implicit read-side critical section due to disabled preemption */
+	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	task_enclave = p->ghost.enclave;
+	WARN_ON_ONCE(!task_enclave);
+
+	/*
+	 * XXX it is possible for a running task to enter ghost into enclave X
+	 * while the cpu it is running on belongs to enclave Y. This is not
+	 * supported properly yet hence the VM_BUG_ON.
+	 */
+	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
+
+	/*
+	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
+	 * that does not belong to any enclave.
+	 */
+	e = rq_enclave ? rq_enclave : task_enclave;
+	if (e)
+		e->abi->yield_task(rq);
+	else
+		WARN_ONCE(1, "task %d/%s without enclave on cpu %d",
+			  p->pid, p->comm, cpu_of(rq));
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)

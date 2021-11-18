@@ -2237,6 +2237,7 @@ struct ghost_abi {
 	struct task_struct *(*pick_next_task)(struct rq *rq);
 	void (*check_preempt_curr)(struct rq *rq, struct task_struct *p,
 				   int wake_flags);
+	void (*yield_task)(struct rq *rq);
 };
 
 /* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
@@ -2253,6 +2254,7 @@ void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued);
 struct task_struct *pick_next_task_ghost(struct rq *rq);
 void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 			      int wake_flags);
+void yield_task_ghost(struct rq *rq);
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\

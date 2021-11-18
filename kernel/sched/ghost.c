@@ -1466,7 +1466,7 @@ static void _check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 	}
 }
 
-static void yield_task_ghost(struct rq *rq)
+static void _yield_task_ghost(struct rq *rq)
 {
 	struct task_struct *curr = rq->curr;
 
@@ -1580,7 +1580,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.task_tick		= task_tick_ghost,	/* ghost_core.c */
 	.pick_next_task		= pick_next_task_ghost,	/* ghost_core.c */
 	.check_preempt_curr	= check_preempt_curr_ghost,  /* ghost_core.c */
-	.yield_task		= yield_task_ghost,
+	.yield_task		= yield_task_ghost,	/* ghost_core.c */
 #ifdef CONFIG_SMP
 	.balance		= balance_ghost,
 	.select_task_rq		= select_task_rq_ghost,
@@ -7465,5 +7465,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.task_tick = _task_tick_ghost,
 	.pick_next_task = _pick_next_task_ghost,
 	.check_preempt_curr = _check_preempt_curr_ghost,
+	.yield_task = _yield_task_ghost,
 };
 
