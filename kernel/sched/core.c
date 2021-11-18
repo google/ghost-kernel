@@ -9422,12 +9422,6 @@ struct cgroup_subsys cpu_cgrp_subsys = {
 #endif	/* CONFIG_CGROUP_SCHED */
 
 #ifndef CONFIG_SCHED_CLASS_GHOST
-SYSCALL_DEFINE5(ghost_run, s64, gtid, u32, agent_barrier, u32, task_barrier,
-                int, run_cpu, int, run_flags)
-{
-	return -ENOSYS;
-}
-
 SYSCALL_DEFINE6(ghost, u64, op, u64, arg1, u64, arg2, u64, arg3, u64, arg4,
                 u64, arg5)
 {

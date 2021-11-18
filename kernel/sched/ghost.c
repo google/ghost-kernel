@@ -4724,8 +4724,7 @@ static inline bool commit_flags_valid(int commit_flags, int valid_commit_flags)
  *
  * Return 0 on success and -1 on failure.
  */
-SYSCALL_DEFINE5(ghost_run, s64, gtid, u32, agent_barrier,
-		u32, task_barrier, int, run_cpu, int, run_flags)
+static int ghost_run(struct ghost_enclave *e, struct ghost_ioc_run __user *arg)
 {
 	struct task_struct *agent;
 	struct rq_flags rf;
@@ -4733,10 +4732,26 @@ SYSCALL_DEFINE5(ghost_run, s64, gtid, u32, agent_barrier,
 	int error = 0;
 	int this_cpu;
 
+	s64 gtid;
+	u32 agent_barrier;
+	u32 task_barrier;
+	int run_cpu;
+	int run_flags;
+	struct ghost_ioc_run run_params;
+
 	const int supported_flags = RTLA_ON_IDLE;
 
 	if (!capable(CAP_SYS_NICE))
 		return -EPERM;
+
+	if (copy_from_user(&run_params, arg, sizeof(struct ghost_ioc_run)))
+		return -EFAULT;
+
+	gtid = run_params.gtid;
+	agent_barrier = run_params.agent_barrier;
+	task_barrier = run_params.task_barrier;
+	run_cpu = run_params.run_cpu;
+	run_flags = run_params.run_flags;
 
 	if (run_cpu < 0 || run_cpu >= nr_cpu_ids || !cpu_online(run_cpu))
 		return -EINVAL;
@@ -6670,6 +6685,8 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 	case GHOST_IOC_TIMERFD_SETTIME:
 		return ghost_timerfd_settime(
 				(struct ghost_ioc_timerfd_settime __user *)arg);
+	case GHOST_IOC_RUN:
+		return ghost_run(e, (struct ghost_ioc_run __user *)arg);
 	}
 	return -ENOIOCTLCMD;
 }

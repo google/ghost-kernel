@@ -363,7 +363,6 @@
 439	common	faccessat2		sys_faccessat2
 440	common	process_madvise		sys_process_madvise
 441	common	epoll_pwait2		sys_epoll_pwait2
-450	64	ghost_run		sys_ghost_run
 451	64	ghost			sys_ghost
 
 #
