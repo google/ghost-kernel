@@ -892,8 +892,8 @@ static void _task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 		ghost_wake_agent_on(agent_target_cpu(rq));
 }
 
-static int balance_ghost(struct rq *rq, struct task_struct *prev,
-			 struct rq_flags *rf)
+static int _balance_ghost(struct rq *rq, struct task_struct *prev,
+			  struct rq_flags *rf)
 {
 
 	struct task_struct *agent = rq->ghost.agent;
@@ -1566,28 +1566,6 @@ static void _task_woken_ghost(struct rq *rq, struct task_struct *p)
 done:
 	ghost_wake_agent_of(p);
 }
-
-DEFINE_SCHED_CLASS(ghost) = {
-	.update_curr		= update_curr_ghost,	/* ghost_core.c */
-	.prio_changed		= prio_changed_ghost,	/* ghost_core.c */
-	.switched_to		= switched_to_ghost,	/* ghost_core.c */
-	.switched_from		= switched_from_ghost,	/* ghost_core.c */
-	.task_dead		= task_dead_ghost,	/* ghost_core.c */
-	.dequeue_task		= dequeue_task_ghost,	/* ghost_core.c */
-	.put_prev_task		= put_prev_task_ghost,	/* ghost_core.c */
-	.enqueue_task		= enqueue_task_ghost,	/* ghost_core.c */
-	.set_next_task		= set_next_task_ghost,	/* ghost_core.c */
-	.task_tick		= task_tick_ghost,	/* ghost_core.c */
-	.pick_next_task		= pick_next_task_ghost,	/* ghost_core.c */
-	.check_preempt_curr	= check_preempt_curr_ghost,  /* ghost_core.c */
-	.yield_task		= yield_task_ghost,	/* ghost_core.c */
-#ifdef CONFIG_SMP
-	.balance		= balance_ghost,
-	.select_task_rq		= select_task_rq_ghost,	/* ghost_core.c */
-	.task_woken		= task_woken_ghost,	/* ghost_core.c */
-	.set_cpus_allowed	= set_cpus_allowed_ghost,  /* ghost_core.c */
-#endif
-};
 
 /*
  * Migrate 'next' (if necessary) in preparation to run it on 'cpu'.
@@ -4601,7 +4579,7 @@ static void ghost_task_yield(struct rq *rq, struct task_struct *p)
 
 	/* See explanation in ghost_task_preempted() */
 	if (p == rq->curr)
-		update_curr_ghost(rq);
+		_update_curr_ghost(rq);
 
 	task_deliver_msg_yield(rq, p);
 }
@@ -7467,6 +7445,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.check_preempt_curr = _check_preempt_curr_ghost,
 	.yield_task = _yield_task_ghost,
 #ifdef CONFIG_SMP
+	.balance = _balance_ghost,
 	.select_task_rq = _select_task_rq_ghost,
 	.task_woken = _task_woken_ghost,
 	.set_cpus_allowed = _set_cpus_allowed_ghost,

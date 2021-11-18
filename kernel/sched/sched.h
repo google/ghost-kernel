@@ -2239,34 +2239,14 @@ struct ghost_abi {
 				   int wake_flags);
 	void (*yield_task)(struct rq *rq);
 #ifdef CONFIG_SMP
+	int (*balance)(struct rq *rq, struct task_struct *prev,
+		       struct rq_flags *rf);
 	int (*select_task_rq)(struct task_struct *p, int cpu, int wake_flags);
 	void (*task_woken)(struct rq *rq, struct task_struct *p);
 	void (*set_cpus_allowed)(struct task_struct *p,
 				 const struct cpumask *newmask, u32 flags);
 #endif
 };
-
-/* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
-void update_curr_ghost(struct rq *rq);
-void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old);
-void switched_to_ghost(struct rq *rq, struct task_struct *p);
-void switched_from_ghost(struct rq *rq, struct task_struct *p);
-void task_dead_ghost(struct task_struct *p);
-void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags);
-void put_prev_task_ghost(struct rq *rq, struct task_struct *p);
-void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags);
-void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first);
-void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued);
-struct task_struct *pick_next_task_ghost(struct rq *rq);
-void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
-			      int wake_flags);
-void yield_task_ghost(struct rq *rq);
-#ifdef CONFIG_SMP
-int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags);
-void task_woken_ghost(struct rq *rq, struct task_struct *p);
-void set_cpus_allowed_ghost(struct task_struct *p,
-			    const struct cpumask *newmask, u32 flags);
-#endif
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\

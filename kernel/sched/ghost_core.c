@@ -860,7 +860,7 @@ DEFINE_SCHED_CLASS(ghost_agent) = {
 #endif
 };
 
-void update_curr_ghost(struct rq *rq)
+static void update_curr_ghost(struct rq *rq)
 {
 	struct ghost_enclave *rq_enclave, *curr_enclave, *e;
 
@@ -890,7 +890,7 @@ void update_curr_ghost(struct rq *rq)
 		e->abi->update_curr(rq);
 }
 
-void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
+static void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
 {
 	struct ghost_enclave *e;
 
@@ -904,7 +904,7 @@ void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
-void switched_to_ghost(struct rq *rq, struct task_struct *p)
+static void switched_to_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_enclave *e;
 
@@ -918,7 +918,7 @@ void switched_to_ghost(struct rq *rq, struct task_struct *p)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
-void switched_from_ghost(struct rq *rq, struct task_struct *p)
+static void switched_from_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_enclave *e;
 
@@ -932,7 +932,7 @@ void switched_from_ghost(struct rq *rq, struct task_struct *p)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
-void task_dead_ghost(struct task_struct *p)
+static void task_dead_ghost(struct task_struct *p)
 {
 	struct ghost_enclave *e;
 
@@ -952,7 +952,7 @@ void task_dead_ghost(struct task_struct *p)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
-void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
+static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
 
@@ -984,7 +984,7 @@ void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
+static void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
 
@@ -1016,7 +1016,7 @@ void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
+static void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
 
@@ -1048,7 +1048,7 @@ void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first)
+static void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
 
@@ -1084,7 +1084,7 @@ void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first)
  * Called from the timer tick handler while holding the rq->lock.  Called only
  * if a ghost task is current.
  */
-void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
+static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
 
@@ -1116,7 +1116,7 @@ void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-struct task_struct *pick_next_task_ghost(struct rq *rq)
+static struct task_struct *pick_next_task_ghost(struct rq *rq)
 {
 	struct task_struct *next;
 	struct ghost_enclave *e;
@@ -1134,7 +1134,7 @@ struct task_struct *pick_next_task_ghost(struct rq *rq)
 	return next;
 }
 
-void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
+static void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 			      int wake_flags)
 {
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
@@ -1167,7 +1167,7 @@ void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-void yield_task_ghost(struct rq *rq)
+static void yield_task_ghost(struct rq *rq)
 {
 	struct task_struct *p = current;
 	struct ghost_enclave *rq_enclave, *task_enclave, *e;
@@ -1201,7 +1201,7 @@ void yield_task_ghost(struct rq *rq)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
+static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	struct ghost_enclave *e;
 
@@ -1213,6 +1213,22 @@ int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 
 	WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 	return 0;
+}
+
+static int balance_ghost(struct rq *rq, struct task_struct *prev,
+			 struct rq_flags *rf)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* Implicit read-side critical section due to disabled preemption */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	if (e)
+		return e->abi->balance(rq, prev, rf);
+
+	return -1;
 }
 
 void task_woken_ghost(struct rq *rq, struct task_struct *p)
@@ -1247,7 +1263,7 @@ void task_woken_ghost(struct rq *rq, struct task_struct *p)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-void set_cpus_allowed_ghost(struct task_struct *p,
+static void set_cpus_allowed_ghost(struct task_struct *p,
 			    const struct cpumask *newmask, u32 flags)
 {
 	struct ghost_enclave *e;
@@ -1260,6 +1276,28 @@ void set_cpus_allowed_ghost(struct task_struct *p,
 	else
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
+
+DEFINE_SCHED_CLASS(ghost) = {
+	.update_curr		= update_curr_ghost,
+	.prio_changed		= prio_changed_ghost,
+	.switched_to		= switched_to_ghost,
+	.switched_from		= switched_from_ghost,
+	.task_dead		= task_dead_ghost,
+	.dequeue_task		= dequeue_task_ghost,
+	.put_prev_task		= put_prev_task_ghost,
+	.enqueue_task		= enqueue_task_ghost,
+	.set_next_task		= set_next_task_ghost,
+	.task_tick		= task_tick_ghost,
+	.pick_next_task		= pick_next_task_ghost,
+	.check_preempt_curr	= check_preempt_curr_ghost,
+	.yield_task		= yield_task_ghost,
+#ifdef CONFIG_SMP
+	.balance		= balance_ghost,
+	.select_task_rq		= select_task_rq_ghost,
+	.task_woken		= task_woken_ghost,
+	.set_cpus_allowed	= set_cpus_allowed_ghost,
+#endif
+};
 
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
