@@ -1300,7 +1300,7 @@ done:
 	return next;
 }
 
-static struct task_struct *pick_next_task_ghost(struct rq *rq)
+static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 {
 	struct task_struct *agent = rq->ghost.agent;
 	struct task_struct *prev = rq->curr;
@@ -1578,7 +1578,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.enqueue_task		= enqueue_task_ghost,	/* ghost_core.c */
 	.set_next_task		= set_next_task_ghost,	/* ghost_core.c */
 	.task_tick		= task_tick_ghost,	/* ghost_core.c */
-	.pick_next_task		= pick_next_task_ghost,
+	.pick_next_task		= pick_next_task_ghost,	/* ghost_core.c */
 	.check_preempt_curr	= check_preempt_curr_ghost,
 	.yield_task		= yield_task_ghost,
 #ifdef CONFIG_SMP
@@ -7463,5 +7463,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.enqueue_task = _enqueue_task_ghost,
 	.set_next_task = _set_next_task_ghost,
 	.task_tick = _task_tick_ghost,
+	.pick_next_task = _pick_next_task_ghost,
 };
 

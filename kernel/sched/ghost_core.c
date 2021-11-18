@@ -1116,6 +1116,24 @@ void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
+struct task_struct *pick_next_task_ghost(struct rq *rq)
+{
+	struct task_struct *next;
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(rq != this_rq());
+
+	/* Implicit read-side critical section due to disabled preemption */
+	e = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+	if (e)
+		next = e->abi->pick_next_task(rq);
+	else
+		next = NULL;
+
+	return next;
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
