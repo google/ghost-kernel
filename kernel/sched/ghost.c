@@ -932,7 +932,7 @@ static int balance_ghost(struct rq *rq, struct task_struct *prev,
 	return rq->ghost.latched_task || rq_adj_nr_running(rq);
 }
 
-static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
+static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	int waker_cpu = smp_processor_id();
 
@@ -1583,7 +1583,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.yield_task		= yield_task_ghost,	/* ghost_core.c */
 #ifdef CONFIG_SMP
 	.balance		= balance_ghost,
-	.select_task_rq		= select_task_rq_ghost,
+	.select_task_rq		= select_task_rq_ghost,	/* ghost_core.c */
 	.task_woken		= task_woken_ghost,
 	.set_cpus_allowed	= set_cpus_allowed_ghost,
 #endif
@@ -7466,5 +7466,8 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.pick_next_task = _pick_next_task_ghost,
 	.check_preempt_curr = _check_preempt_curr_ghost,
 	.yield_task = _yield_task_ghost,
+#ifdef CONFIG_SMP
+	.select_task_rq = _select_task_rq_ghost,
+#endif
 };
 

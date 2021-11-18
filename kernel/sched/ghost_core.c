@@ -1201,6 +1201,20 @@ void yield_task_ghost(struct rq *rq)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
+int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
+{
+	struct ghost_enclave *e;
+
+	lockdep_assert_held(&p->pi_lock);
+
+	e = p->ghost.enclave;
+	if (e)
+		return e->abi->select_task_rq(p, cpu, wake_flags);
+
+	WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
+	return 0;
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
