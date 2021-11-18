@@ -732,7 +732,7 @@ static void _dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	}
 }
 
-static void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
+static void _put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 {
 	_update_curr_ghost(rq);
 }
@@ -1578,7 +1578,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.switched_from		= switched_from_ghost,	/* ghost_core.c */
 	.task_dead		= task_dead_ghost,	/* ghost_core.c */
 	.dequeue_task		= dequeue_task_ghost,	/* ghost_core.c */
-	.put_prev_task		= put_prev_task_ghost,
+	.put_prev_task		= put_prev_task_ghost,	/* ghost_core.c */
 	.enqueue_task		= enqueue_task_ghost,
 	.set_next_task		= set_next_task_ghost,
 	.task_tick		= task_tick_ghost,
@@ -7463,5 +7463,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.switched_from = _switched_from_ghost,
 	.task_dead = _task_dead_ghost,
 	.dequeue_task = _dequeue_task_ghost,
+	.put_prev_task = _put_prev_task_ghost,
 };
 
