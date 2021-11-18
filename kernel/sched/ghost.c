@@ -53,7 +53,6 @@ static void _ghost_task_new(struct rq *rq, struct task_struct *p,
 			    bool runnable);
 static void ghost_task_yield(struct rq *rq, struct task_struct *p);
 static void ghost_task_blocked(struct rq *rq, struct task_struct *p);
-static void task_dead_ghost(struct task_struct *p);
 static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 				      bool runnable);
 static void task_deliver_msg_affinity_changed(struct rq *rq,
@@ -1577,7 +1576,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.prio_changed		= prio_changed_ghost,	/* ghost_core.c */
 	.switched_to		= switched_to_ghost,	/* ghost_core.c */
 	.switched_from		= switched_from_ghost,	/* ghost_core.c */
-	.task_dead		= task_dead_ghost,
+	.task_dead		= task_dead_ghost,	/* ghost_core.c */
 	.dequeue_task		= dequeue_task_ghost,
 	.put_prev_task		= put_prev_task_ghost,
 	.enqueue_task		= enqueue_task_ghost,
@@ -2881,7 +2880,7 @@ static int _ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		 * Don't allow an agent to move out of the ghost sched_class.
 		 * There is no use case for this and more importantly we don't
 		 * apply the side-effects of agent leaving the CPU (compare to
-		 * task_dead_ghost() where we do).
+		 * _task_dead_ghost() where we do).
 		 */
 		if (p->ghost.agent)
 			return -EPERM;
@@ -4351,7 +4350,7 @@ static void ghost_delayed_put_task_struct(struct rcu_head *rhp)
 	put_task_struct(tsk);
 }
 
-static void task_dead_ghost(struct task_struct *p)
+static void _task_dead_ghost(struct task_struct *p)
 {
 	struct rq_flags rf;
 	struct rq *rq;
@@ -7462,5 +7461,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.prio_changed = _prio_changed_ghost,
 	.switched_to = _switched_to_ghost,
 	.switched_from = _switched_from_ghost,
+	.task_dead = _task_dead_ghost,
 };
 

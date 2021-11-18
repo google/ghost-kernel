@@ -932,6 +932,26 @@ void switched_from_ghost(struct rq *rq, struct task_struct *p)
 		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
 }
 
+void task_dead_ghost(struct task_struct *p)
+{
+	struct ghost_enclave *e;
+
+	/*
+	 * This looks risky since neither 'p->pi_lock' nor 'rq->lock' is held
+	 * at this point but is safe because 'p' is no longer reachable from
+	 * userspace at this point (it lost identity much earlier in do_exit).
+	 *
+	 * The only thing that can mutate 'p->ghost.enclave' is moving out of
+	 * ghost but that cannot happen for the reason stated above.
+	 */
+	e = p->ghost.enclave;
+
+	if (e)
+		e->abi->task_dead(p);
+	else
+		WARN_ONCE(1, "task %d/%s without enclave", p->pid, p->comm);
+}
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags)
