@@ -1435,8 +1435,8 @@ done:
 	return next;
 }
 
-static void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
-				     int wake_flags)
+static void _check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
+				      int wake_flags)
 {
 	if (is_agent(rq, p)) {
 		/*
@@ -1579,7 +1579,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.set_next_task		= set_next_task_ghost,	/* ghost_core.c */
 	.task_tick		= task_tick_ghost,	/* ghost_core.c */
 	.pick_next_task		= pick_next_task_ghost,	/* ghost_core.c */
-	.check_preempt_curr	= check_preempt_curr_ghost,
+	.check_preempt_curr	= check_preempt_curr_ghost,  /* ghost_core.c */
 	.yield_task		= yield_task_ghost,
 #ifdef CONFIG_SMP
 	.balance		= balance_ghost,
@@ -7464,5 +7464,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.set_next_task = _set_next_task_ghost,
 	.task_tick = _task_tick_ghost,
 	.pick_next_task = _pick_next_task_ghost,
+	.check_preempt_curr = _check_preempt_curr_ghost,
 };
 
