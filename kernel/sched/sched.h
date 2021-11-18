@@ -2233,6 +2233,7 @@ struct ghost_abi {
 	void (*enqueue_task)(struct rq *rq, struct task_struct *p, int flags);
 	void (*set_next_task)(struct rq *rq, struct task_struct *p,
 			      bool first);
+	void (*task_tick)(struct rq *rq, struct task_struct *p, int queued);
 };
 
 /* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
@@ -2245,6 +2246,7 @@ void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags);
 void put_prev_task_ghost(struct rq *rq, struct task_struct *p);
 void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags);
 void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first);
+void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued);
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\

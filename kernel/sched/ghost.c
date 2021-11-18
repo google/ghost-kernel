@@ -848,11 +848,7 @@ static void tick_handler(struct ghost_enclave *e, struct rq *rq)
 	}
 }
 
-/*
- * Called from the timer tick handler while holding the rq->lock.  Called only
- * if a ghost task is current.
- */
-static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
+static void _task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 {
 	struct task_struct *agent = rq->ghost.agent;
 
@@ -1581,7 +1577,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.put_prev_task		= put_prev_task_ghost,	/* ghost_core.c */
 	.enqueue_task		= enqueue_task_ghost,	/* ghost_core.c */
 	.set_next_task		= set_next_task_ghost,	/* ghost_core.c */
-	.task_tick		= task_tick_ghost,
+	.task_tick		= task_tick_ghost,	/* ghost_core.c */
 	.pick_next_task		= pick_next_task_ghost,
 	.check_preempt_curr	= check_preempt_curr_ghost,
 	.yield_task		= yield_task_ghost,
@@ -7466,5 +7462,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.put_prev_task = _put_prev_task_ghost,
 	.enqueue_task = _enqueue_task_ghost,
 	.set_next_task = _set_next_task_ghost,
+	.task_tick = _task_tick_ghost,
 };
 
