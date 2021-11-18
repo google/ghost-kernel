@@ -2228,6 +2228,7 @@ struct ghost_abi {
 	void (*switched_to)(struct rq *rq, struct task_struct *p);
 	void (*switched_from)(struct rq *rq, struct task_struct *p);
 	void (*task_dead)(struct task_struct *p);
+	void (*dequeue_task)(struct rq *rq, struct task_struct *p, int flags);
 };
 
 /* temporary: remove after moving 'ghost_sched_class' into ghost_core.c */
@@ -2236,6 +2237,7 @@ void prio_changed_ghost(struct rq *rq, struct task_struct *p, int old);
 void switched_to_ghost(struct rq *rq, struct task_struct *p);
 void switched_from_ghost(struct rq *rq, struct task_struct *p);
 void task_dead_ghost(struct task_struct *p);
+void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags);
 
 #define DEFINE_GHOST_ABI(name) \
 const static struct ghost_abi __##name##_ghost_abi	\

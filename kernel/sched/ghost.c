@@ -557,7 +557,7 @@ static void __update_curr_ghost(struct rq *rq, bool update_sw)
 	/*
 	 * Bail if this due to a "spurious" dequeue.
 	 *
-	 * For e.g. dequeue_task_ghost() is called when scheduling properties
+	 * For e.g. _dequeue_task_ghost() is called when scheduling properties
 	 * of a runnable ghost task change (e.g. nice or cpu affinity), but
 	 * if that task is not oncpu then nothing needs to be done here.
 	 */
@@ -672,7 +672,7 @@ static void _switched_from_ghost(struct rq *rq, struct task_struct *p)
 	}
 }
 
-static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
+static void _dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
 	const bool spurious = flags & DEQUEUE_SAVE;
 	const bool sleeping = flags & DEQUEUE_SLEEP;
@@ -684,7 +684,7 @@ static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	 * is not running (in this case we'll just update the cputime of
 	 * whatever task happens to be oncpu).
 	 *
-	 * Ordinarily we wouldn't care but we routinely dequeue_task_ghost()
+	 * Ordinarily we wouldn't care but we routinely _dequeue_task_ghost()
 	 * when migrating a task via ghost_move_task() during txn commit so
 	 * we call _update_curr_ghost() only if 'p' is actually running.
 	 */
@@ -1577,7 +1577,7 @@ DEFINE_SCHED_CLASS(ghost) = {
 	.switched_to		= switched_to_ghost,	/* ghost_core.c */
 	.switched_from		= switched_from_ghost,	/* ghost_core.c */
 	.task_dead		= task_dead_ghost,	/* ghost_core.c */
-	.dequeue_task		= dequeue_task_ghost,
+	.dequeue_task		= dequeue_task_ghost,	/* ghost_core.c */
 	.put_prev_task		= put_prev_task_ghost,
 	.enqueue_task		= enqueue_task_ghost,
 	.set_next_task		= set_next_task_ghost,
@@ -1609,7 +1609,7 @@ static struct rq *ghost_move_task(struct rq *rq, struct task_struct *next,
 
 	/*
 	 * Cleared in invalidate_cached_tasks() via move_queued_task()
-	 * and dequeue_task_ghost(). We cannot clear it here because
+	 * and _dequeue_task_ghost(). We cannot clear it here because
 	 * move_queued_task() will release rq->lock (the rq returned
 	 * by move_queued_task() is different than the one passed in).
 	 */
@@ -7462,5 +7462,6 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.switched_to = _switched_to_ghost,
 	.switched_from = _switched_from_ghost,
 	.task_dead = _task_dead_ghost,
+	.dequeue_task = _dequeue_task_ghost,
 };
 
