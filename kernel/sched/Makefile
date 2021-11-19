@@ -36,5 +36,6 @@ obj-$(CONFIG_CPU_FREQ_GOV_SCHEDUTIL) += cpufreq_schedutil.o
 obj-$(CONFIG_MEMBARRIER) += membarrier.o
 obj-$(CONFIG_CPU_ISOLATION) += isolation.o
 obj-$(CONFIG_PSI) += psi.o
+CFLAGS_ghost.o += -I$(srctree)/fs/kernfs
 obj-$(CONFIG_SCHED_CLASS_GHOST) += ghost.o
 obj-$(CONFIG_SCHED_CLASS_GHOST) += ghost_core.o

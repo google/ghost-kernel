@@ -27,6 +27,7 @@
 #include <trace/events/sched.h>
 
 #include "sched.h"
+#include "kernfs-internal.h"
 
 #define __INCLUDE_KERNEL_SCHED_GHOST
 #include "ghost_uapi.h"
@@ -6123,8 +6124,6 @@ static void cpu_idle(struct rq *rq)
 	}
 	rq_unlock_irq(rq, &rf);
 }
-
-#include "../../fs/kernfs/kernfs-internal.h"
 
 /* Helper for when you "echo foo > ctl" without the -n. */
 static void strip_slash_n(char *buf, size_t count)
