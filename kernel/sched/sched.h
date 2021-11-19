@@ -2205,7 +2205,7 @@ struct ghost_abi {
 	void (*commit_greedy_txn)(int cpu);
 	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
-	void (*timerfd_triggered)(int cpu, uint64_t cookie);
+	void (*timerfd_triggered)(int cpu, uint64_t type, uint64_t cookie);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
 	bool (*ghost_msg_is_valid_access)(int off, int size,

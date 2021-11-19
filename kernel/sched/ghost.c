@@ -3812,7 +3812,8 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 }
 
 /* Returns true if MSG_CPU_TIMER_EXPIRED was produced and false otherwise */
-static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t cookie)
+static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t type,
+					     uint64_t cookie)
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
 	struct ghost_msg_payload_timer *payload = &msg->timer;
@@ -3822,6 +3823,7 @@ static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t cookie)
 
 	msg->type = MSG_CPU_TIMER_EXPIRED;
 	payload->cpu = cpu_of(rq);
+	payload->type = type;
 	payload->cookie = cookie;
 
 	return !produce_for_agent(rq, msg);
@@ -6048,6 +6050,7 @@ static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 
 	ktfd_ghost.enabled = timerfd_ghost.flags & TIMERFD_GHOST_ENABLED;
 	ktfd_ghost.cpu = timerfd_ghost.cpu;
+	ktfd_ghost.type = timerfd_ghost.type;
 	ktfd_ghost.cookie = timerfd_ghost.cookie;
 
 	ret = do_timerfd_settime(timerfd, flags, &new, &old, &ktfd_ghost);
@@ -6060,7 +6063,7 @@ static int ghost_timerfd_settime(struct ghost_ioc_timerfd_settime __user *arg)
 	return ret;
 }
 
-static void _ghost_timerfd_triggered(int cpu, uint64_t cookie)
+static void _ghost_timerfd_triggered(int cpu, uint64_t type, uint64_t cookie)
 {
 	struct rq *rq;
 	struct rq_flags rf;
@@ -6071,7 +6074,7 @@ static void _ghost_timerfd_triggered(int cpu, uint64_t cookie)
 	rq = cpu_rq(cpu);
 	rq_lock_irqsave(rq, &rf);
 
-	if (cpu_deliver_timer_expired(rq, cookie))
+	if (cpu_deliver_timer_expired(rq, type, cookie))
 		ghost_wake_agent_on(agent_target_cpu(rq));
 
 	rq_unlock_irqrestore(rq, &rf);

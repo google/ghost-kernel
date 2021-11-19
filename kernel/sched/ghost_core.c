@@ -780,7 +780,7 @@ void ghost_timerfd_triggered(struct __kernel_timerfd_ghost *ktfd)
 	rcu_read_lock();
 	e = rcu_dereference(per_cpu(enclave, cpu));
 	if (e)
-		e->abi->timerfd_triggered(cpu, ktfd->cookie);
+		e->abi->timerfd_triggered(cpu, ktfd->type, ktfd->cookie);
 	else
 		WARN_ONCE(true, "cpu %d has no enclave", cpu);
 	rcu_read_unlock();

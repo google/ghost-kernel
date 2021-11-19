@@ -647,6 +647,7 @@ struct sched_ghost_entity {
 struct __kernel_timerfd_ghost {
 	bool enabled;
 	int cpu;
+	uint64_t type;
 	uint64_t cookie;
 };
 
