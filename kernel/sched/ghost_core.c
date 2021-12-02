@@ -45,9 +45,9 @@ static void gf_strip_slash_n(char *buf, size_t count)
 		*n = '\0';
 }
 
-static ghost_abi_ptr_t ghost_abi_lookup(uint version)
+static const struct ghost_abi *ghost_abi_lookup(uint version)
 {
-	ghost_abi_ptr_t abi;
+	const struct ghost_abi *abi;
 
 	for_each_abi(abi) {
 		if (abi->version == version)
@@ -62,7 +62,7 @@ static int make_enclave(struct kernfs_node *parent, unsigned long id,
 {
 	struct kernfs_node *dir;
 	struct ghost_enclave *e;
-	ghost_abi_ptr_t abi;
+	const struct ghost_abi *abi;
 	char name[31];
 
 	abi = ghost_abi_lookup(version);
@@ -126,7 +126,7 @@ static struct kernfs_ops gf_ops_top_ctl = {
 
 static int gf_top_version_show(struct seq_file *sf, void *v)
 {
-	ghost_abi_ptr_t abi;
+	const struct ghost_abi *abi;
 
 	for_each_abi(abi)
 		seq_printf(sf, "%u\n", abi->version);
@@ -175,7 +175,7 @@ static int gf_add_files(struct kernfs_node *parent, struct gf_dirent *dirtab,
 
 static void __init ghost_abi_init(void)
 {
-	ghost_abi_ptr_t abi;
+	const struct ghost_abi *abi;
 	int ret;
 
 	for_each_abi(abi) {
@@ -466,10 +466,10 @@ void __init init_sched_ghost_class(void)
  */
 struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
 {
-	ghost_abi_ptr_t abi;
+	const struct ghost_abi *abi;
 	struct ghost_enclave *e = NULL;
 
-	static ghost_abi_ptr_t last_abi;
+	static const struct ghost_abi *last_abi;
 
 	*fd_to_put = fdget(fd);
 	if (!fd_to_put->file)
@@ -1450,7 +1450,7 @@ static bool ghost_msg_is_valid_access(int off, int size,
 				      struct bpf_insn_access_aux *info)
 {
 	int version = bpf_prog_eat_abi(prog);
-	ghost_abi_ptr_t abi = ghost_abi_lookup(version);
+	const struct ghost_abi *abi = ghost_abi_lookup(version);
 
 	if (WARN_ON_ONCE(!abi))
 		return false;

@@ -6943,7 +6943,7 @@ static void runtime_adjust_dirtabs(void)
 	enc_txn->size = GHOST_CPU_DATA_REGION_SIZE;
 }
 
-static int __init abi_init(ghost_abi_ptr_t abi)
+static int __init abi_init(const struct ghost_abi *abi)
 {
 	/*
 	 * ghost bpf programs encode the ABI they were compiled against
@@ -6962,7 +6962,7 @@ static int __init abi_init(ghost_abi_ptr_t abi)
 	return 0;
 }
 
-static struct ghost_enclave *create_enclave(ghost_abi_ptr_t abi,
+static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 					    struct kernfs_node *dir,
 					    ulong id)
 {

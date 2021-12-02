@@ -2180,13 +2180,11 @@ typedef int64_t gtid_t;
 #define GHOST_TID_SEQNUM_BITS	41
 #define GHOST_TID_PID_BITS	22
 
-typedef const struct ghost_abi *ghost_abi_ptr_t;
-
 struct ghost_abi {
 	int version;
-	int (*abi_init)(ghost_abi_ptr_t abi);
+	int (*abi_init)(const struct ghost_abi *abi);
 	struct ghost_enclave *
-		(*create_enclave)(ghost_abi_ptr_t abi,
+		(*create_enclave)(const struct ghost_abi *abi,
 				  struct kernfs_node *dir, ulong id);
 	void (*enclave_release)(struct kref *k);
 	struct ghost_enclave *(*ctlfd_enclave_get)(struct file *file);
