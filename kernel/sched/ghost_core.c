@@ -11,11 +11,8 @@ static struct kernfs_root *ghost_kfs_root;
 extern const struct ghost_abi __begin_ghost_abi[];
 extern const struct ghost_abi __end_ghost_abi[];
 
-#define first_ghost_abi	    (&__begin_ghost_abi[0])
-#define	last_ghost_abi	    (&__end_ghost_abi[-1])
-
 #define for_each_abi(abi) \
-	for (abi = first_ghost_abi; abi <= last_ghost_abi; abi++)
+	for (abi = __begin_ghost_abi; abi < __end_ghost_abi; abi++)
 
 /*
  * We do not want to make 'SG_COOKIE_CPU_BITS' larger than necessary so that
