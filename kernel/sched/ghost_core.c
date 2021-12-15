@@ -416,29 +416,43 @@ void ghost_wait_for_rendezvous(struct rq *rq)
 	e->abi->wait_for_rendezvous(rq);
 }
 
-void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev)
+static struct ghost_enclave *_ghost_resolve_enclave(struct rq *rq,
+						    struct task_struct *p)
 {
-	struct ghost_enclave *this_enclave, *prev_enclave, *e;
+	struct ghost_enclave *rq_enclave, *task_enclave;
 
 	VM_BUG_ON(preemptible());
-	VM_BUG_ON(rq != this_rq());
 
-	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	this_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-	prev_enclave = prev->ghost.enclave;
+	/* Implicit read-side critical section due to disabled preemption */
+	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
+
+	/*
+	 * Caller is responsible for ensuring stability of 'p->ghost.enclave'.
+	 * This usually happens as a side-effect of holding 'rq->lock' of the
+	 * cpu where the task is queued or running.
+	 */
+	task_enclave = p->ghost.enclave;
+	WARN_ON_ONCE(!task_enclave && ghost_class(p->sched_class));
 
 	/*
 	 * XXX it is possible for a running task to enter ghost into enclave X
 	 * while the cpu it is running on belongs to enclave Y. This is not
 	 * supported properly yet hence the VM_BUG_ON.
 	 */
-	VM_BUG_ON(this_enclave && prev_enclave && this_enclave != prev_enclave);
+	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
 
 	/*
-	 * 'this_enclave' may be NULL if a running task enters ghost on a cpu
+	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
 	 * that does not belong to any enclave.
 	 */
-	e = this_enclave ? this_enclave : prev_enclave;
+	return rq_enclave ? rq_enclave : task_enclave;
+}
+
+void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev)
+{
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, prev);
+
+	VM_BUG_ON(rq != this_rq());
 
 	if (e != NULL)
 		e->abi->pnt_prologue(rq, prev);
@@ -586,27 +600,9 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next)
 {
-	struct ghost_enclave *this_enclave, *prev_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, prev);
 
-	VM_BUG_ON(preemptible());
 	VM_BUG_ON(rq != this_rq());
-
-	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	this_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-	prev_enclave = prev->ghost.enclave;
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(this_enclave && prev_enclave && this_enclave != prev_enclave);
-
-	/*
-	 * 'this_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = this_enclave ? this_enclave : prev_enclave;
 
 	if (e != NULL)
 		e->abi->prepare_task_switch(rq, prev, next);
@@ -859,30 +855,10 @@ DEFINE_SCHED_CLASS(ghost_agent) = {
 
 static void update_curr_ghost(struct rq *rq)
 {
-	struct ghost_enclave *rq_enclave, *curr_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, rq->curr);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-	if (ghost_class(rq->curr->sched_class))
-		curr_enclave = rq->curr->ghost.enclave;
-	else
-		curr_enclave = NULL;
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && curr_enclave && rq_enclave != curr_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : curr_enclave;
 	if (e)
 		e->abi->update_curr(rq);
 }
@@ -951,29 +927,10 @@ static void task_dead_ghost(struct task_struct *p)
 
 static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->dequeue_task(rq, p, flags);
 	else
@@ -983,29 +940,10 @@ static void dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 
 static void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->put_prev_task(rq, p);
 	else
@@ -1015,29 +953,10 @@ static void put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 
 static void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->enqueue_task(rq, p, flags);
 	else
@@ -1047,29 +966,10 @@ static void enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 
 static void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->set_next_task(rq, p, first);
 	else
@@ -1083,29 +983,10 @@ static void set_next_task_ghost(struct rq *rq, struct task_struct *p, bool first
  */
 static void task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->task_tick(rq, p, queued);
 	else
@@ -1134,29 +1015,10 @@ static struct task_struct *pick_next_task_ghost(struct rq *rq)
 static void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 			      int wake_flags)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->check_preempt_curr(rq, p, wake_flags);
 	else
@@ -1167,30 +1029,11 @@ static void check_preempt_curr_ghost(struct rq *rq, struct task_struct *p,
 static void yield_task_ghost(struct rq *rq)
 {
 	struct task_struct *p = current;
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	VM_BUG_ON(rq != this_rq());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->yield_task(rq);
 	else
@@ -1230,29 +1073,10 @@ static int balance_ghost(struct rq *rq, struct task_struct *prev,
 
 void task_woken_ghost(struct rq *rq, struct task_struct *p)
 {
-	struct ghost_enclave *rq_enclave, *task_enclave, *e;
+	struct ghost_enclave *e = _ghost_resolve_enclave(rq, p);
 
-	VM_BUG_ON(preemptible());
 	lockdep_assert_held(&rq->lock);
 
-	/* Implicit read-side critical section due to disabled preemption */
-	rq_enclave = rcu_dereference_sched(per_cpu(enclave, cpu_of(rq)));
-
-	task_enclave = p->ghost.enclave;
-	WARN_ON_ONCE(!task_enclave);
-
-	/*
-	 * XXX it is possible for a running task to enter ghost into enclave X
-	 * while the cpu it is running on belongs to enclave Y. This is not
-	 * supported properly yet hence the VM_BUG_ON.
-	 */
-	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
-
-	/*
-	 * 'rq_enclave' may be NULL if a task is woken up on a cpu
-	 * that does not belong to any enclave.
-	 */
-	e = rq_enclave ? rq_enclave : task_enclave;
 	if (e)
 		e->abi->task_woken(rq, p);
 	else
