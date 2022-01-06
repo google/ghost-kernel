@@ -5213,6 +5213,8 @@ enum {
 	BTF_F_ZERO	=	(1ULL << 3),
 };
 
+#define GHOST_BPF
+
 struct bpf_ghost_sched {
 };
 
