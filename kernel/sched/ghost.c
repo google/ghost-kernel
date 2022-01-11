@@ -5248,6 +5248,11 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		goto out;
 	}
 
+	if (unlikely(!rcu_dereference_sched(per_cpu(enclave, cpu_of(rq))))) {
+		state = GHOST_TXN_CPU_UNAVAIL;
+		goto out;
+	}
+
 	if (unlikely(!txn_commit_allowed(rq, gtid, sync))) {
 		state = GHOST_TXN_NOT_PERMITTED;
 		goto out;
