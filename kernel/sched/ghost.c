@@ -6206,6 +6206,12 @@ static int gf_e_open(struct kernfs_open_file *of)
 {
 	struct ghost_enclave *e = of_to_e(of);
 
+	/*
+	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
+	 * scenario.  agent's should open files from CFS.
+	 */
+	WARN_ON_ONCE(is_agent(task_rq(current), current));
+
 	kref_get(&e->kref);
 	return 0;
 }
@@ -6477,6 +6483,12 @@ static struct ghost_sw_region *of_to_swr(struct kernfs_open_file *of)
 static int gf_swr_open(struct kernfs_open_file *of)
 {
 	struct ghost_sw_region *swr = of_to_swr(of);
+
+	/*
+	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
+	 * scenario.  agent's should open files from CFS.
+	 */
+	WARN_ON_ONCE(is_agent(task_rq(current), current));
 
 	kref_get(&swr->enclave->kref);
 	return 0;
