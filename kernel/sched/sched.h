@@ -105,7 +105,6 @@ extern void call_trace_sched_update_nr_running(struct rq *rq, int count);
 struct ghost_rq {
 	struct task_struct *agent;	/* protected by e->lock and rq->lock */
 	uint32_t agent_barrier;
-	bool agent_remove_enclave_cpu;	/* protected by e->lock */
 	bool blocked_in_run;		/* agent is blocked in 'ghost_run()' */
 	bool agent_should_wake;
 	bool must_resched;		/* rq->curr must reschedule in PNT */

@@ -1994,17 +1994,24 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 	 * give the cpu back to the system right away, we don't have to worry
 	 * about anyone reusing the rq's agent fields.
 	 *
-	 * However, we *do* want to "unpublish" the assignment of the cpu to the
-	 * enclave.  This way, once we synchronize_rcu, no one can be using this
-	 * cpu.  We could defer that until release_from_ghost(), but that is not
-	 * a convenient place to call synchronize_rcu() (holding RQ lock).
+	 * Note that pcpu->enclave is still set until the agent task exits a
+	 * given cpu.  We must follow the pattern of:
+	 *   1) pcpu->enclave = NULL
+	 *   2) synchronize_rcu()
+	 *   3) decref the enclave
+	 * because pcpu->enclave is protected and kreffable during
+	 * rcu_read_lock().
 	 *
-	 * In essence, __enclave_remove_cpu() is split: we unpublish the cpu
-	 * here, then return it to the system when the agent leaves ghost.  Note
-	 * the agent could be leaving ghost of its own volition concurrently;
-	 * the enclave lock ensures that if we see an agent, it will remove the
-	 * cpu.  And if not, we fully remove it here.  We make that decision
-	 * before we unlock in the loop below.
+	 * All three steps are handled in release_from_ghost().  We tell the
+	 * agent to do this via agent->ghost.__agent_decref_enclave.  This needs
+	 * to be per-agent, and not per-rq, since the moment we return the cpu
+	 * to the system, another enclave and agent can reuse the fields in
+	 * rq->ghost.
+	 *
+	 * Note the agent could be leaving ghost of its own volition
+	 * concurrently; the enclave lock ensures that if we see an agent, it
+	 * will remove the cpu when it exits.  And if not, we fully remove it
+	 * here.  We make that decision before we unlock in the loop below.
 	 *
 	 * Why do we unlock?  Because send_sig grabs the pi_lock, and the lock
 	 * ordering is pi -> rq -> e.  This is safe, since the lock is no longer
@@ -2022,8 +2029,9 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 			__enclave_remove_cpu(e, cpu);
 			continue;
 		}
-		__enclave_unpublish_cpu(e, cpu);
-		rq->ghost.agent_remove_enclave_cpu = true;
+		agent = rq->ghost.agent;
+		kref_get(&e->kref);
+		agent->ghost.__agent_decref_enclave = e;
 		/*
 		 * We can't force_sig().  The task might be exiting and losing
 		 * its sighand_struct.  send_sig_info() checks for that.  We
@@ -2034,7 +2042,6 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 		 * might be dying on its own, we need to get a refcount while we
 		 * poke it.
 		 */
-		agent = rq->ghost.agent;
 		get_task_struct(agent);
 		spin_unlock_irqrestore(&e->lock, flags);
 		send_sig_info(SIGKILL, SEND_SIG_PRIV, agent);
@@ -4294,9 +4301,23 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		ghost_claim_and_kill_txn(rq->cpu, GHOST_TXN_NO_AGENT);
 
 		/* See ghost_destroy_enclave() */
-		if (rq->ghost.agent_remove_enclave_cpu) {
-			rq->ghost.agent_remove_enclave_cpu = false;
+		if (p->ghost.__agent_decref_enclave) {
+			/* Agents should only exit, never setsched out. */
+			WARN_ON_ONCE(p->state != TASK_DEAD);
+			VM_BUG_ON(p->ghost.__agent_decref_enclave != e);
+			__enclave_unpublish_cpu(e, rq->cpu);
 			__enclave_return_cpu(e, rq->cpu);
+			/*
+			 * At this moment, this cpu can be added to a new
+			 * enclave (or our previous enclave!).
+			 *
+			 * Additionally, once we unlock the rq, a new agent task
+			 * can attach to this cpu and use the rq->ghost fields.
+			 *
+			 * We've set pcpu->enclave = NULL (step 1).  Steps 2 and
+			 * 3 (sync rcu and decref) are handled when we return to
+			 * _task_dead_ghost() call_rcu.
+			 */
 		}
 	}
 
@@ -4322,6 +4343,14 @@ static void ghost_delayed_put_task_struct(struct rcu_head *rhp)
 {
 	struct task_struct *tsk = container_of(rhp, struct task_struct,
 					       ghost.rcu);
+	/*
+	 * Step 3 of "destroyed with agent": decref.
+	 * See ghost_destroy_enclave().
+	 */
+	if (tsk->ghost.__agent_decref_enclave) {
+		kref_put(&tsk->ghost.__agent_decref_enclave->kref,
+			 enclave_release);
+	}
 	put_task_struct(tsk);
 }
 

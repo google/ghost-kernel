@@ -597,6 +597,8 @@ struct sched_ghost_entity {
 	struct ghost_queue *dst_q;
 	struct ghost_status_word *status_word;
 	struct ghost_enclave *enclave;
+	/* See ghost_destroy_enclave() */
+	struct ghost_enclave *__agent_decref_enclave;
 
 	/*
 	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
