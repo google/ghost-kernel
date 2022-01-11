@@ -6572,13 +6572,9 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 	return len;
 }
 
-static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
-			 unsigned long arg)
+static long enclave_ioctl(struct ghost_enclave *e, unsigned int cmd,
+			  unsigned long arg)
 {
-	struct ghost_enclave *e = of_to_e(of);
-
-	if (!(of->file->f_mode & FMODE_WRITE))
-		return -EACCES;
 	switch (cmd) {
 	case GHOST_IOC_NULL:
 		return 0;
@@ -6615,6 +6611,35 @@ static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
 		return ghost_run(e, (struct ghost_ioc_run __user *)arg);
 	}
 	return -ENOIOCTLCMD;
+}
+
+static long gf_ctl_ioctl(struct kernfs_open_file *of, unsigned int cmd,
+			 unsigned long arg)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	long ret;
+
+	if (!(of->file->f_mode & FMODE_WRITE))
+		return -EACCES;
+
+	/*
+	 * Active protection prevents gf_e_release from being called (and any
+	 * mmaps from being unmapped, though that doesn't apply to ctl).  Active
+	 * protection prevents the kn from being drained/deleted while we are
+	 * operating on it.  It is meant for syscalls in progress, not held
+	 * forever.  Some of these ioctls, e.g. ghost_run, can block for
+	 * arbitrarily long.
+	 *
+	 * The only thing we use the kn for is to get a stable reference to e.
+	 * We can just up the kref on our own, and ignore the kn.
+	 */
+	kref_get(&e->kref);
+	kernfs_break_active_protection(of->kn);
+	ret = enclave_ioctl(e, cmd, arg);
+	kernfs_unbreak_active_protection(of->kn);
+	kref_put(&e->kref, enclave_release);
+
+	return ret;
 }
 
 static struct kernfs_ops gf_ops_e_ctl = {
