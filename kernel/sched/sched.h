@@ -2186,6 +2186,7 @@ struct ghost_abi {
 		(*create_enclave)(const struct ghost_abi *abi,
 				  struct kernfs_node *dir, ulong id);
 	void (*enclave_release)(struct kref *k);
+	void (*enclave_add_cpu)(struct ghost_enclave *e, int cpu);
 	struct ghost_enclave *(*ctlfd_enclave_get)(struct file *file);
 	void (*ctlfd_enclave_put)(struct file *file);
 	int (*setscheduler)(struct task_struct *p, struct rq *rq,
@@ -2262,8 +2263,7 @@ const static struct ghost_abi __##name##_ghost_abi	\
 _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
 void init_sched_ghost_class(void);
-int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
-void ghost_publish_cpu(struct ghost_enclave *e, int cpu);
+int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
 void ghost_remove_cpu(struct ghost_enclave *e, int cpu);
 
 int64_t ghost_sync_group_cookie(void);

@@ -314,14 +314,11 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, cpu_owner);
 
 DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
-int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
+/* Caller holds e->lock.  Either all cpus are added, or none are. */
+int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
 {
 	int cpu;
 
-	/*
-	 * 'e->lock' must be held across ghost_claim_cpus() and the
-	 * corresponding ghost_publish_cpu().
-	 */
 	VM_BUG_ON(!spin_is_locked(&e->lock));
 
 	spin_lock(&cpu_rsvp);
@@ -339,21 +336,16 @@ int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
 	}
 
 	for_each_cpu(cpu, new_cpus)
+		e->abi->enclave_add_cpu(e, cpu);
+
+	for_each_cpu(cpu, new_cpus)
 		per_cpu(cpu_owner, cpu) = e;
+
+	for_each_cpu(cpu, new_cpus)
+		rcu_assign_pointer(per_cpu(enclave, cpu), e);
 
 	spin_unlock(&cpu_rsvp);
 	return 0;
-}
-
-void ghost_publish_cpu(struct ghost_enclave *e, int cpu)
-{
-	VM_BUG_ON(!spin_is_locked(&e->lock));
-
-	spin_lock(&cpu_rsvp);
-	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
-	WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
-	rcu_assign_pointer(per_cpu(enclave, cpu), e);
-	spin_unlock(&cpu_rsvp);
 }
 
 void ghost_remove_cpu(struct ghost_enclave *e, int cpu)

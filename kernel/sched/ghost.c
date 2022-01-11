@@ -1783,10 +1783,9 @@ static inline void queue_incref(struct ghost_queue *q)
 }
 
 /*
- * Caller must hold e->lock and 'cpu' must have already been claimed
- * on behalf of the enclave via ghost_claim_cpus().
+ * Callback from ghost_add_cpus().  Caller must hold e->lock.
  */
-static void __enclave_add_cpu(struct ghost_enclave *e, int cpu)
+static void ___enclave_add_cpu(struct ghost_enclave *e, int cpu)
 {
 	struct ghost_txn *txn;
 
@@ -1807,12 +1806,6 @@ static void __enclave_add_cpu(struct ghost_enclave *e, int cpu)
 
 	cpumask_set_cpu(cpu, &e->cpus);
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), txn);
-
-	/*
-	 * We have already claimed 'cpu' for this enclave so now publish
-	 * it to the rest of the kernel via the per_cpu(enclave) pointer.
-	 */
-	ghost_publish_cpu(e, cpu);
 }
 
 /* Caller must hold e->lock and synchronize_rcu() on return */
@@ -2113,12 +2106,10 @@ static int ghost_enclave_set_cpus(struct ghost_enclave *e,
 		}
 	}
 
-	ret = ghost_claim_cpus(e, add);
+	ret = ghost_add_cpus(e, add);
 	if (ret)
 		goto out_e;
 
-	for_each_cpu(cpu, add)
-		__enclave_add_cpu(e, cpu);
 	for_each_cpu(cpu, del)
 		__enclave_remove_cpu(e, cpu);
 
@@ -7386,6 +7377,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.abi_init = abi_init,
 	.create_enclave = create_enclave,
 	.enclave_release = enclave_release,
+	.enclave_add_cpu = ___enclave_add_cpu,
 	.ctlfd_enclave_get = ctlfd_enclave_get,
 	.ctlfd_enclave_put = ctlfd_enclave_put,
 	.setscheduler = _ghost_setscheduler,
