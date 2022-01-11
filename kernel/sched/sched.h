@@ -2264,8 +2264,7 @@ _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 void init_sched_ghost_class(void);
 int ghost_claim_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
 void ghost_publish_cpu(struct ghost_enclave *e, int cpu);
-void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
-void ghost_return_cpu(struct ghost_enclave *e, int cpu);
+void ghost_remove_cpu(struct ghost_enclave *e, int cpu);
 
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);

@@ -356,28 +356,14 @@ void ghost_publish_cpu(struct ghost_enclave *e, int cpu)
 	spin_unlock(&cpu_rsvp);
 }
 
-void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu)
+void ghost_remove_cpu(struct ghost_enclave *e, int cpu)
 {
-	/*
-	 * 'e->lock' must be held across ghost_unpublish_cpu() and the
-	 * corresponding ghost_return_cpu().
-	 */
 	VM_BUG_ON(!spin_is_locked(&e->lock));
 
 	spin_lock(&cpu_rsvp);
 	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
 	WARN_ON_ONCE(per_cpu(enclave, cpu) != e);
 	rcu_assign_pointer(per_cpu(enclave, cpu), NULL);
-	spin_unlock(&cpu_rsvp);
-}
-
-void ghost_return_cpu(struct ghost_enclave *e, int cpu)
-{
-	VM_BUG_ON(!spin_is_locked(&e->lock));
-
-	spin_lock(&cpu_rsvp);
-	WARN_ON_ONCE(per_cpu(cpu_owner, cpu) != e);
-	WARN_ON_ONCE(per_cpu(enclave, cpu) != NULL);
 	per_cpu(cpu_owner, cpu) = NULL;
 	spin_unlock(&cpu_rsvp);
 }

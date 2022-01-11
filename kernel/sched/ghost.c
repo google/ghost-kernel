@@ -1815,32 +1815,15 @@ static void __enclave_add_cpu(struct ghost_enclave *e, int cpu)
 	ghost_publish_cpu(e, cpu);
 }
 
-/* Hold e->lock.  Caller must synchronize_rcu(). */
-static void __enclave_unpublish_cpu(struct ghost_enclave *e, int cpu)
-{
-	VM_BUG_ON(!spin_is_locked(&e->lock));
-
-	rcu_assign_pointer(per_cpu(ghost_txn, cpu), NULL);
-	ghost_unpublish_cpu(e, cpu);
-}
-
-/* Caller must hold e->lock */
-static void __enclave_return_cpu(struct ghost_enclave *e, int cpu)
+/* Caller must hold e->lock and synchronize_rcu() on return */
+static void __enclave_remove_cpu(struct ghost_enclave *e, int cpu)
 {
 	VM_BUG_ON(!spin_is_locked(&e->lock));
 	VM_BUG_ON(!cpumask_test_cpu(cpu, &e->cpus));
 
+	rcu_assign_pointer(per_cpu(ghost_txn, cpu), NULL);
 	cpumask_clear_cpu(cpu, &e->cpus);
-	ghost_return_cpu(e, cpu);
-}
-
-/* Caller must hold e->lock and synchronize_rcu() on return */
-static void __enclave_remove_cpu(struct ghost_enclave *e, int cpu)
-{
-	__enclave_unpublish_cpu(e, cpu);
-	/* cpu is no longer participating in ghost scheduling */
-	__enclave_return_cpu(e, cpu);
-	/* cpu can now be assigned to another enclave */
+	ghost_remove_cpu(e, cpu);
 }
 
 /*
@@ -2050,7 +2033,7 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 	}
 	spin_unlock_irqrestore(&e->lock, flags);
 
-	synchronize_rcu();	/* Required after unpublishing a cpu */
+	synchronize_rcu();	/* Required after removing a cpu */
 
 	/*
 	 * It is safe to reap all tasks in the enclave only _after_
@@ -2142,7 +2125,7 @@ static int ghost_enclave_set_cpus(struct ghost_enclave *e,
 out_e:
 	spin_unlock_irqrestore(&e->lock, flags);
 
-	synchronize_rcu();	/* Required after unpublishing a cpu */
+	synchronize_rcu();	/* Required after removing a cpu */
 
 	free_cpumask_var(add);
 	free_cpumask_var(del);
@@ -4305,8 +4288,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 			/* Agents should only exit, never setsched out. */
 			WARN_ON_ONCE(p->state != TASK_DEAD);
 			VM_BUG_ON(p->ghost.__agent_decref_enclave != e);
-			__enclave_unpublish_cpu(e, rq->cpu);
-			__enclave_return_cpu(e, rq->cpu);
+			__enclave_remove_cpu(e, rq->cpu);
 			/*
 			 * At this moment, this cpu can be added to a new
 			 * enclave (or our previous enclave!).
@@ -5622,7 +5604,7 @@ void ghost_commit_all_greedy_txns(void)
 	 * Note that e's cpu mask could be changed concurrently, with cpus added
 	 * or removed.  This is benign.  First, any commits will look at the
 	 * rcu-protected ghost_txn pointer.  That's what really matters, and
-	 * any caller to __enclave_unpublish_cpu() will synchronize_rcu().
+	 * any caller to __enclave_remove_cpu() will synchronize_rcu().
 	 *
 	 * Furthermore, if a cpu is added while we are looking (which is not
 	 * protected by RCU), it's not a big deal.  This is a greedy commit, and
