@@ -18,8 +18,19 @@ isolation.
 You must compile and install this kernel in order to use the [ghOSt userspace
 component](https://www.github.com/google/ghost-userspace).
 
+## Requirements
+
 This kernel is Linux 5.11. We recommend installing Ubuntu 20.04 LTS, which ships
 with Linux 5.4 by default, as the distribution. Compile this kernel on Ubuntu
 20.04 and then replace the existing 5.4 kernel with this one.
+
+## Goal
+
+We aim to gather feedback from users and hear about potential use cases
+before upstreaming the patches brought here to the mainline linux repository.
+The series of patches applied to this repository cannot be shipped as a kernel module
+since we have to change the core scheduling code to deliver our patches to mainline.
+
+## Disclaimer
 
 This is not an officially supported Google product.
