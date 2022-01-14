@@ -4090,10 +4090,12 @@ static int link_create(union bpf_attr *attr)
 		ret = bpf_xdp_link_attach(attr, prog);
 		break;
 #endif
+#ifdef CONFIG_SCHED_CLASS_GHOST
 	case BPF_PROG_TYPE_GHOST_SCHED:
 	case BPF_PROG_TYPE_GHOST_MSG:
 		ret = ghost_bpf_link_attach(attr, prog);
 		break;
+#endif
 	default:
 		ret = -EINVAL;
 	}
