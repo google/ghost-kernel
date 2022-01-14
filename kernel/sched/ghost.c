@@ -80,10 +80,6 @@ static void _ghost_task_preempted(struct rq *rq, struct task_struct *p,
 
 static void ghost_task_new(struct rq *rq, struct task_struct *p);
 
-struct rq *context_switch(struct rq *rq, struct task_struct *prev,
-			  struct task_struct *next, struct rq_flags *rf);
-
-void schedule_callback(struct rq *rq);
 struct rq *move_queued_task(struct rq *rq, struct rq_flags *rf,
 			    struct task_struct *p, int new_cpu);
 
