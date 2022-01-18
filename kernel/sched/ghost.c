@@ -4263,6 +4263,11 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		WRITE_ONCE(rq->ghost.agent_barrier, 0);
 		p->ghost.agent = false;
 		VM_BUG_ON(rq->ghost.blocked_in_run);
+		/*
+		 * In case the user left some value that the next enclave could
+		 * hit.
+		 */
+		WRITE_ONCE(rq->ghost.prev_resched_seq, ~0ULL);
 
 		/*
 		 * Clean up any pending transactions.  We need to do this here,
@@ -4393,6 +4398,12 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
 	rq->ghost.latched_task = p;
 	rq->ghost.must_resched = false;
 	rq->ghost.run_flags = run_flags;
+
+	/*
+	 * Even though we don't send a message, this is a change in cpu state.
+	 * When we later send TASK_LATCHED, that will increment again.
+	 */
+	rq->ghost.cpu_seqnum++;
 }
 
 /*
@@ -7081,6 +7092,14 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 	rq->ghost.switchto_count = -rq->ghost.switchto_count;
 	WARN_ON_ONCE(rq->ghost.switchto_count > 0);
 	rq->ghost.pnt_bpf_once = true;
+
+	/*
+	 * Lockless way to set must_resched, which kicks prev off cpu.  The
+	 * agent knows the cpu_seqnum from the last message it received, e.g.
+	 * the TASK_LATCHED when prev started to run.
+	 */
+	if (READ_ONCE(rq->ghost.prev_resched_seq) == rq->ghost.cpu_seqnum)
+		rq->ghost.must_resched = true;
 }
 
 /*

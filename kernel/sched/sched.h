@@ -106,7 +106,8 @@ struct ghost_rq {
 	struct task_struct *agent;	/* protected by e->lock and rq->lock */
 	uint32_t agent_barrier;
 	bool blocked_in_run;		/* agent is blocked in 'ghost_run()' */
-	bool agent_should_wake;
+	bool agent_should_wake;		/* racy reads and writes */
+	uint64_t prev_resched_seq;	/* racy, cpu_seqnum to resched */
 	bool must_resched;		/* rq->curr must reschedule in PNT */
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
 	bool skip_latched_preemption;

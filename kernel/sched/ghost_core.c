@@ -703,6 +703,7 @@ void init_ghost_rq(struct ghost_rq *ghost_rq)
 {
 	INIT_LIST_HEAD(&ghost_rq->tasks);
 	INIT_LIST_HEAD(&ghost_rq->enclave_work);
+	WRITE_ONCE(ghost_rq->prev_resched_seq, ~0ULL);
 }
 
 int ghost_sched_fork(struct task_struct *p)
