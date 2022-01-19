@@ -1191,6 +1191,32 @@ static const struct bpf_func_proto bpf_ghost_run_gtid_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_2(bpf_ghost_resched_cpu, u32, cpu, u64, cpu_seqnum)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	BUILD_BUG_ON(BPF_FUNC_ghost_resched_cpu != 206);
+
+	/* rcu_read_lock_sched() not needed; preemption is disabled. */
+	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	return e->abi->bpf_resched_cpu(cpu, cpu_seqnum);
+}
+
+static const struct bpf_func_proto bpf_ghost_resched_cpu_proto = {
+	.func		= bpf_ghost_resched_cpu,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1206,6 +1232,8 @@ ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		default:
 			return NULL;
 		}
+	case BPF_FUNC_ghost_resched_cpu:
+		return &bpf_ghost_resched_cpu_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -1234,6 +1262,8 @@ ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	switch (func_id) {
 	case BPF_FUNC_ghost_wake_agent:
 		return &bpf_ghost_wake_agent_proto;
+	case BPF_FUNC_ghost_resched_cpu:
+		return &bpf_ghost_resched_cpu_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

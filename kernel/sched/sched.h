@@ -2208,6 +2208,7 @@ struct ghost_abi {
 	void (*timerfd_triggered)(int cpu, uint64_t type, uint64_t cookie);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
+	int (*bpf_resched_cpu)(int cpu, u64 cpu_seqnum);
 	bool (*ghost_msg_is_valid_access)(int off, int size,
 					  enum bpf_access_type type,
 					  const struct bpf_prog *prog,

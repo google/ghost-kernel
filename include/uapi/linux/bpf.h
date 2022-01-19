@@ -3849,6 +3849,16 @@ union bpf_attr {
  *
  *	Return
  *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_resched_cpu(u32 cpu, u64 cpu_seqnum)
+ *	Description
+ *		Reschedules **cpu** if its state is still **cpu_seqnum**, such
+ *		that it calls pick_next_task and will not pick prev again.
+ *		Typically, it will run BPF-PNT.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4057,6 +4067,7 @@ union bpf_attr {
 	FN(placeholder_039),		\
 	FN(ghost_wake_agent),		\
 	FN(ghost_run_gtid),		\
+	FN(ghost_resched_cpu),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

@@ -7245,6 +7245,30 @@ static int bpf_run_gtid(s64 gtid, u32 task_barrier, int run_flags, int cpu)
 				   check_caller_enclave);
 }
 
+static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
+{
+	int this_cpu = smp_processor_id();
+	struct rq *rq;
+
+	if (cpu < 0)
+		return -EINVAL;
+	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
+		return -ERANGE;
+	if (!check_same_enclave(this_cpu, cpu))
+		return -EXDEV;
+
+	rq = cpu_rq(cpu);
+	WRITE_ONCE(rq->ghost.prev_resched_seq, cpu_seqnum);
+	if (cpu == this_cpu) {
+		set_tsk_need_resched(current);
+		set_preempt_need_resched();
+	} else {
+		resched_cpu_unlocked(cpu);
+	}
+
+	return 0;
+}
+
 static bool ghost_msg_is_valid_access(int off, int size,
 				      enum bpf_access_type type,
 				      const struct bpf_prog *prog,
@@ -7429,6 +7453,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.timerfd_triggered = _ghost_timerfd_triggered,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
+	.bpf_resched_cpu = bpf_resched_cpu,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.bpf_link_attach = bpf_link_attach,
 	.bpf_link_detach = bpf_link_detach,
