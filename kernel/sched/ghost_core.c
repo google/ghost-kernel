@@ -312,6 +312,24 @@ __exitcall(ghostfs_exit);
 static DEFINE_SPINLOCK(cpu_rsvp);
 DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
+struct ghost_enclave *get_target_enclave(void)
+{
+	return current->ghost.__target_enclave;
+}
+
+struct ghost_enclave *set_target_enclave(struct ghost_enclave *e)
+{
+	struct ghost_enclave *old = current->ghost.__target_enclave;
+
+	current->ghost.__target_enclave = e;
+	return old;
+}
+
+void restore_target_enclave(struct ghost_enclave *old)
+{
+	current->ghost.__target_enclave = old;
+}
+
 /* Caller holds e->lock.  Either all cpus are added, or none are. */
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
 {
@@ -1141,8 +1159,7 @@ BPF_CALL_1(bpf_ghost_wake_agent, u32, cpu)
 	 */
 	BUILD_BUG_ON(BPF_FUNC_ghost_wake_agent != 204);
 
-	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+	e = get_target_enclave();
 
 	/* Paranoia: this is not expected */
 	if (WARN_ON_ONCE(!e))
@@ -1171,8 +1188,7 @@ BPF_CALL_3(bpf_ghost_run_gtid, s64, gtid, u32, task_barrier, int, run_flags)
 	 */
 	BUILD_BUG_ON(BPF_FUNC_ghost_run_gtid != 205);
 
-	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+	e = get_target_enclave();
 
 	/* Paranoia: this is not expected */
 	if (WARN_ON_ONCE(!e))
@@ -1199,8 +1215,7 @@ BPF_CALL_2(bpf_ghost_resched_cpu, u32, cpu, u64, cpu_seqnum)
 
 	BUILD_BUG_ON(BPF_FUNC_ghost_resched_cpu != 206);
 
-	/* rcu_read_lock_sched() not needed; preemption is disabled. */
-	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+	e = get_target_enclave();
 
 	/* Paranoia: this is not expected */
 	if (WARN_ON_ONCE(!e))

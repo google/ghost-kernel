@@ -2263,6 +2263,20 @@ const static struct ghost_abi __##name##_ghost_abi	\
 
 _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
+/*
+ * Some functions operate on an enclave, but we are unable to easily pass the
+ * enclave parameter.  This enclave is the `target` for an operation.
+ *
+ * Rules:
+ * - set_target_enclave returns the old target.  Restore it when you are
+ * done.
+ * - may be called from IRQ context.
+ * - the target_enclave is bound to the current task
+ */
+struct ghost_enclave *get_target_enclave(void);
+struct ghost_enclave *set_target_enclave(struct ghost_enclave *e);
+void restore_target_enclave(struct ghost_enclave *old);
+
 void init_sched_ghost_class(void);
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
 void ghost_remove_cpu(struct ghost_enclave *e, int cpu);

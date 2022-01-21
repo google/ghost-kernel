@@ -600,6 +600,9 @@ struct sched_ghost_entity {
 	/* See ghost_destroy_enclave() */
 	struct ghost_enclave *__agent_decref_enclave;
 
+	/* For operations with an "implicit" enclave parameter. */
+	struct ghost_enclave *__target_enclave;
+
 	/*
 	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
 	 * for flags that are used to defer messages.

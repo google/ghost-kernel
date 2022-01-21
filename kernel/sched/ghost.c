@@ -140,6 +140,8 @@ static bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 {
 	struct bpf_ghost_sched_kern ctx = {};
 	struct bpf_prog *prog;
+	struct ghost_enclave *old_target;
+	bool ret;
 
 	lockdep_assert_held(&rq->lock);
 
@@ -147,8 +149,11 @@ static bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
 	if (!prog)
 		return false;
 
+	old_target = set_target_enclave(e);
 	/* prog returns 1 if we want a tick on this cpu. */
-	return BPF_PROG_RUN(prog, &ctx) != 1;
+	ret = BPF_PROG_RUN(prog, &ctx) != 1;
+	restore_target_enclave(old_target);
+	return ret;
 }
 
 #define BPF_GHOST_PNT_DONT_IDLE		1
@@ -158,6 +163,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 {
 	struct bpf_ghost_sched_kern ctx = {};
 	struct bpf_prog *prog;
+	struct ghost_enclave *old_target;
 	int ret;
 
 	lockdep_assert_held(&rq->lock);
@@ -177,7 +183,9 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	rq_unpin_lock(rq, rf);
 	raw_spin_unlock(&rq->lock);
 
+	old_target = set_target_enclave(e);
 	ret = BPF_PROG_RUN(prog, &ctx);
+	restore_target_enclave(old_target);
 
 	raw_spin_lock(&rq->lock);
 	rq_repin_lock(rq, rf);
@@ -204,6 +212,7 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 			       struct bpf_ghost_msg *msg)
 {
 	struct bpf_prog *prog;
+	struct ghost_enclave *old_target;
 	bool send;
 
 	rcu_read_lock();
@@ -213,7 +222,9 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 		return true;
 	}
 	/* Program returns 0 if they want us to send the message. */
+	old_target = set_target_enclave(e);
 	send = BPF_PROG_RUN(prog, msg) == 0;
+	restore_target_enclave(old_target);
 	rcu_read_unlock();
 	return send;
 }
