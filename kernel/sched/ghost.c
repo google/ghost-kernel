@@ -6245,6 +6245,21 @@ static void gf_e_release(struct kernfs_open_file *of)
 	kref_put(&e->kref, enclave_release);
 }
 
+static int gf_abi_version_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	WARN_ON_ONCE(e->abi->version != GHOST_VERSION);
+	seq_printf(sf, "%u\n", e->abi->version);
+	return 0;
+}
+
+static struct kernfs_ops gf_ops_e_abi_version = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_abi_version_show,
+};
+
 /*
  * There can be at most one writable open, and there can be any number of
  * read-only opens.
@@ -6325,6 +6340,37 @@ static struct kernfs_ops gf_ops_e_agent_online = {
 	.release		= gf_agent_online_release,
 	.seq_show		= gf_agent_online_show,
 	.write			= gf_agent_online_write,
+};
+
+static int gf_commit_at_tick_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->commit_at_tick));
+	return 0;
+}
+
+static ssize_t gf_commit_at_tick_write(struct kernfs_open_file *of, char *buf,
+				       size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->commit_at_tick, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_commit_at_tick = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_commit_at_tick_show,
+	.write			= gf_commit_at_tick_write,
 };
 
 static int gf_cpu_data_mmap(struct kernfs_open_file *of,
@@ -6764,6 +6810,39 @@ static struct kernfs_ops gf_ops_e_runnable_timeout = {
 	.write			= gf_runnable_timeout_write,
 };
 
+static int gf_status_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+	unsigned long fl;
+	bool is_active;
+	unsigned long nr_tasks;
+
+	/*
+	 * Userspace uses this to find any active enclave, since they don't have
+	 * any other methods yet to know which enclave to use.
+	 */
+	spin_lock_irqsave(&e->lock, fl);
+	/*
+	 * We don't need to lock to read agent_online, but eventually we'll
+	 * check for the presence of an interstitial scheduler too.  This status
+	 * is for the *enclave*, not the *agent*.
+	 */
+	is_active = e->agent_online;
+	nr_tasks = e->nr_tasks;
+	spin_unlock_irqrestore(&e->lock, fl);
+
+	seq_printf(sf, "version %u\n", e->abi->version);
+	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
+	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
+	return 0;
+}
+
+static struct kernfs_ops gf_ops_e_status = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_status_show,
+};
+
 static int gf_switchto_disabled_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -6826,85 +6905,6 @@ static struct kernfs_ops gf_ops_e_wake_on_waker_cpu = {
 	.write			= gf_wake_on_waker_cpu_write,
 };
 
-static int gf_commit_at_tick_show(struct seq_file *sf, void *v)
-{
-	struct ghost_enclave *e = seq_to_e(sf);
-
-	seq_printf(sf, "%d", READ_ONCE(e->commit_at_tick));
-	return 0;
-}
-
-static ssize_t gf_commit_at_tick_write(struct kernfs_open_file *of, char *buf,
-				       size_t len, loff_t off)
-{
-	struct ghost_enclave *e = of_to_e(of);
-	int err;
-	int tunable;
-
-	err = kstrtoint(buf, 0, &tunable);
-	if (err)
-		return -EINVAL;
-
-	WRITE_ONCE(e->commit_at_tick, !!tunable);
-
-	return len;
-}
-
-static struct kernfs_ops gf_ops_e_commit_at_tick = {
-	.open			= gf_e_open,
-	.release		= gf_e_release,
-	.seq_show		= gf_commit_at_tick_show,
-	.write			= gf_commit_at_tick_write,
-};
-
-static int gf_status_show(struct seq_file *sf, void *v)
-{
-	struct ghost_enclave *e = seq_to_e(sf);
-	unsigned long fl;
-	bool is_active;
-	unsigned long nr_tasks;
-
-	/*
-	 * Userspace uses this to find any active enclave, since they don't have
-	 * any other methods yet to know which enclave to use.
-	 */
-	spin_lock_irqsave(&e->lock, fl);
-	/*
-	 * We don't need to lock to read agent_online, but eventually we'll
-	 * check for the presence of an interstitial scheduler too.  This status
-	 * is for the *enclave*, not the *agent*.
-	 */
-	is_active = e->agent_online;
-	nr_tasks = e->nr_tasks;
-	spin_unlock_irqrestore(&e->lock, fl);
-
-	seq_printf(sf, "version %u\n", e->abi->version);
-	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
-	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
-	return 0;
-}
-
-static struct kernfs_ops gf_ops_e_status = {
-	.open			= gf_e_open,
-	.release		= gf_e_release,
-	.seq_show		= gf_status_show,
-};
-
-static int gf_abi_version_show(struct seq_file *sf, void *v)
-{
-	struct ghost_enclave *e = seq_to_e(sf);
-
-	WARN_ON_ONCE(e->abi->version != GHOST_VERSION);
-	seq_printf(sf, "%u\n", e->abi->version);
-	return 0;
-}
-
-static struct kernfs_ops gf_ops_e_abi_version = {
-	.open			= gf_e_open,
-	.release		= gf_e_release,
-	.seq_show		= gf_abi_version_show,
-};
-
 static struct gf_dirent enclave_dirtab[] = {
 	{
 		.name		= "sw_regions",
@@ -6912,9 +6912,19 @@ static struct gf_dirent enclave_dirtab[] = {
 		.is_dir		= true,
 	},
 	{
+		.name		= "abi_version",
+		.mode		= 0444,
+		.ops		= &gf_ops_e_abi_version,
+	},
+	{
 		.name		= "agent_online",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_agent_online,
+	},
+	{
+		.name		= "commit_at_tick",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_commit_at_tick,
 	},
 	{
 		.name		= "cpu_data",
@@ -6942,6 +6952,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.ops		= &gf_ops_e_runnable_timeout,
 	},
 	{
+		.name		= "status",
+		.mode		= 0444,
+		.ops		= &gf_ops_e_status,
+	},
+	{
 		.name		= "switchto_disabled",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_switchto_disabled,
@@ -6950,21 +6965,6 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "wake_on_waker_cpu",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_wake_on_waker_cpu,
-	},
-	{
-		.name		= "commit_at_tick",
-		.mode		= 0664,
-		.ops		= &gf_ops_e_commit_at_tick,
-	},
-	{
-		.name		= "status",
-		.mode		= 0444,
-		.ops		= &gf_ops_e_status,
-	},
-	{
-		.name		= "abi_version",
-		.mode		= 0444,
-		.ops		= &gf_ops_e_abi_version,
 	},
 	{0},
 };
