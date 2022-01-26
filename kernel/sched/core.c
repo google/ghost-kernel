@@ -5903,13 +5903,6 @@ static void __setscheduler_params(struct task_struct *p,
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	if (ghost_policy(policy)) {
-		if (ghost_agent(attr)) {
-			/*
-			 * This might catch an unlock in between
-			 * ghost_setscheduler() and here.
-			 */
-			WARN_ON_ONCE(task_rq(p)->ghost.agent != p);
-		}
 		p->rt_priority = 0;
 		p->normal_prio = normal_prio(p);
 		set_load_weight(p, true);
@@ -5998,10 +5991,6 @@ static int __sched_setscheduler(struct task_struct *p,
 	int reset_on_fork;
 	int queue_flags = DEQUEUE_SAVE | DEQUEUE_MOVE | DEQUEUE_NOCLOCK;
 	struct rq *rq;
-#ifdef CONFIG_SCHED_CLASS_GHOST
-	struct ghost_enclave *new_e;
-	struct fd f_enc;
-#endif
 
 	/* The pi code expects interrupts enabled */
 	BUG_ON(pi && in_interrupt());
@@ -6022,9 +6011,7 @@ recheck:
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	if (ghost_policy(policy)) {
-		retval = ghost_validate_sched_attr(attr);
-		if (retval)
-			return retval;
+		/* ghost_setscheduler() can fail, so we do all checks there. */
 	} else
 #endif
 	{
@@ -6210,22 +6197,13 @@ change:
 	}
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	if (ghost_policy(policy)) {
-		new_e = ghost_fdget_enclave(ghost_schedattr_to_enclave_fd(attr),
-					    &f_enc);
-	} else {
-		new_e = NULL;
-	}
 	if (ghost_policy(policy) || ghost_policy(p->policy)) {
-		int error = ghost_setscheduler(p, rq, attr, new_e,
-					       &reset_on_fork);
+		int error = ghost_setscheduler(p, rq, attr, &reset_on_fork);
 
 		if (error) {
 			task_rq_unlock(rq, p, &rf);
 			if (pi)
 				cpuset_read_unlock();
-			if (ghost_policy(policy))
-				ghost_fdput_enclave(new_e, &f_enc);
 			return error;
 		}
 	}
@@ -6292,11 +6270,6 @@ change:
 	/* Run balance callbacks after we've adjusted the PI chain: */
 	balance_callbacks(rq, head);
 	preempt_enable();
-
-#ifdef CONFIG_SCHED_CLASS_GHOST
-	if (ghost_policy(policy))
-		ghost_fdput_enclave(new_e, &f_enc);
-#endif
 
 	return 0;
 

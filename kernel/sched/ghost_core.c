@@ -471,7 +471,7 @@ void __init init_sched_ghost_class(void)
  *
  * Caller must call ghost_fdput_enclave with e and &fd_to_put, even on error.
  */
-struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
+static struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
 {
 	const struct ghost_abi *abi;
 	struct ghost_enclave *e = NULL;
@@ -519,39 +519,15 @@ struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
  * Pairs with calls to ghost_fdget_enclave().  You can't call this while holding
  * the rq lock.
  */
-void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd)
+static void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd)
 {
 	if (e)
 		e->abi->ctlfd_enclave_put(fd->file);
 	fdput(*fd);
 }
 
-#define GHOST_SCHED_TASK_PRIO	0
-#define GHOST_SCHED_AGENT_PRIO	1
-int ghost_validate_sched_attr(const struct sched_attr *attr)
-{
-	/*
-	 * A thread can only make a task an agent if the thread has the
-         * CAP_SYS_NICE capability.
-	 */
-	switch (attr->sched_priority) {
-		case GHOST_SCHED_TASK_PRIO:
-			return 0;
-		case GHOST_SCHED_AGENT_PRIO:
-			return capable(CAP_SYS_NICE) ? 0 : -EPERM;
-		default:
-			return -EINVAL;
-	}
-}
-
-bool ghost_agent(const struct sched_attr *attr)
-{
-	return attr->sched_priority == GHOST_SCHED_AGENT_PRIO;
-}
-
 int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		       const struct sched_attr *attr,
-		       struct ghost_enclave *new_e,
 		       int *reset_on_fork)
 {
 	struct ghost_enclave *e;
@@ -579,15 +555,18 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 	if (oldpolicy == newpolicy)
 		return -EPERM;
 
-	if (ghost_policy(oldpolicy))
+	if (ghost_policy(oldpolicy)) {
 		e = p->ghost.enclave;
-	else
-		e = new_e;
+		WARN_ON_ONCE(!e);
+	} else {
+		e = get_target_enclave();
+	}
 
+	/* Callers from sys_sched_setscheduler will not have e set. */
 	if (!e)
 		return -EBADF;
 
-	return e->abi->setscheduler(p, rq, attr, new_e, reset_on_fork);
+	return e->abi->setscheduler(e, p, rq, attr, reset_on_fork);
 }
 
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,

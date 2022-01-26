@@ -212,16 +212,6 @@ static inline void sched_ghost_entity_init(struct task_struct *p)
 	INIT_LIST_HEAD(&p->ghost.task_list);
 }
 
-static inline int ghost_schedattr_to_enclave_fd(const struct sched_attr *attr)
-{
-	return attr->sched_runtime;
-}
-
-static inline int ghost_schedattr_to_queue_fd(const struct sched_attr *attr)
-{
-	return attr->sched_deadline;
-}
-
 #else
 static inline unsigned long ghost_cfs_added_load(struct rq *rq) { return 0; }
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
@@ -2190,9 +2180,8 @@ struct ghost_abi {
 	void (*enclave_add_cpu)(struct ghost_enclave *e, int cpu);
 	struct ghost_enclave *(*ctlfd_enclave_get)(struct file *file);
 	void (*ctlfd_enclave_put)(struct file *file);
-	int (*setscheduler)(struct task_struct *p, struct rq *rq,
-			    const struct sched_attr *attr,
-			    struct ghost_enclave *new_e,
+	int (*setscheduler)(struct ghost_enclave *e, struct task_struct *p,
+			    struct rq *rq, const struct sched_attr *attr,
 			    int *reset_on_fork);
 	int (*fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*cleanup_fork)(struct ghost_enclave *e, struct task_struct *p);
@@ -2287,23 +2276,12 @@ void ghost_wait_for_rendezvous(struct rq *rq);
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
 void ghost_tick(struct rq *rq);
 
-/*
- * Helper to map an 'fd' to a 'ghost_enclave'. Must always be followed with
- * a call to ghost_fdput_enclave() even if the lookup fails.
- *
- * N.B. ghost_fdput_enclave() cannot be called with 'rq->lock' held.
- */
-struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put);
-void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd_to_put);
 int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		       const struct sched_attr *attr,
-		       struct ghost_enclave *new_e,
 		       int *reset_on_fork);
 int ghost_sched_fork(struct task_struct *p);
 void ghost_sched_cleanup_fork(struct task_struct *p);
 
-bool ghost_agent(const struct sched_attr *attr);
-int ghost_validate_sched_attr(const struct sched_attr *attr);
 void ghost_copy_process_epilogue(struct task_struct *p);
 
 static inline int enclave_abi(const struct ghost_enclave *e)

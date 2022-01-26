@@ -2813,37 +2813,27 @@ static void _ghost_sched_cleanup_fork(struct ghost_enclave *e,
 }
 
 /*
- * For tasks attempting to join ghost, __sched_setscheduler() needs to pass us
- * the enclave, and it needs to manage the reference counting on the fd and its
- * underlying kn.  This is because we can't call ghost_fdput_enclave directly
- * while holding the rq lock, because it eventually calls kernfs_put_active,
- * which grabs the rq lock.
+ * attr->sched_priority is *not* set by the user.  It is set by the ghostfs
+ * commands that call setscheduler elsewhere in this file.  They aren't part of
+ * any ABI.
  *
- * You'd think we could use a balance_callback, and pass it the fd_to_put
- * (f_enc) and whether or not it had an enclave.  However, there's no good place
- * to put those arguments.  We could stash them in struct ghost_rq, but for one
- * small problem: the rq lock is released before balance_callback() runs.  That
- * means someone else could grab the lock, then setsched another task, thereby
- * clobbering the args stored in ghost_rq.
+ * sched_priority is an argument from ghostfs to tell us if we're dealing with
+ * an agent or not, and if so, which qfd it wants.
+ *  < -1 : a regular task
+ * == -1 : an agent, use the default queue
+ * >=  0 : an agent, sched_priority is the fd for the queue.
  *
- * We can't dynamically allocate memory either, since we're holding the rq lock.
- * I even considered reusing the sched_attr struct: cast it to some other struct
- * and hang it off a linked list on the rq.  The problem there is that although
- * we will call balance_callback when we return to __sched_setscheduler(),
- * balance_callback makes no guarantees about when the callback will run.  If
- * two threads call balance_callback(), one of them will run the callbacks and
- * the other will return immediately.  If we return immediately, then we can't
- * use the schedattr.
- *
- * The most reasonable fix for all of this is to directly call
- * ghost_fdput_enclave() from __sched_setscheduler().
+ * Anyone who calls sys_sched_setscheduler (or setattr) will not have a
+ * target_enclave() set.
  */
-static int _ghost_setscheduler(struct task_struct *p, struct rq *rq,
-			       const struct sched_attr *attr,
-			       struct ghost_enclave *new_e,
+static int _ghost_setscheduler(struct ghost_enclave *e, struct task_struct *p,
+			       struct rq *rq, const struct sched_attr *attr,
 			       int *reset_on_fork)
 {
-	int ret;
+	int ret, qfd;
+
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
 
 	/* Task 'p' is departing the ghost sched class. */
 	if (ghost_policy(p->policy)) {
@@ -2860,13 +2850,21 @@ static int _ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		return 0;
 	}
 
-	if (WARN_ON_ONCE(!new_e))
-		return -EBADF;
+	/* Any setsched *into* ghost must have come from ghostfs. */
+	if (WARN_ON_ONCE(!get_target_enclave()))
+		return -ENODEV;
 
-	if (ghost_agent(attr)) {
-		int qfd = ghost_schedattr_to_queue_fd(attr);
+	qfd = (int)attr->sched_priority;
+	if (qfd >= -1) {
 		struct fd f_que = {0};
 		struct ghost_queue *q = NULL;
+
+		/*
+		 * A thread can only make a task an agent if the thread has the
+		 * CAP_SYS_NICE capability.
+		 */
+		if (!capable(CAP_SYS_NICE))
+			return -EPERM;
 
 		if (qfd != -1) {
 			f_que = fdget(qfd);
@@ -2879,12 +2877,12 @@ static int _ghost_setscheduler(struct task_struct *p, struct rq *rq,
 
 		/* It's OK to set reset_on_fork even if we fail. */
 		*reset_on_fork = 1;
-		ret = ghost_prep_agent(new_e, p, rq, q);
+		ret = ghost_prep_agent(e, p, rq, q);
 
 		if (qfd != -1)
 			fdput(f_que);
 	} else {
-		ret = ghost_prep_task(new_e, p, false);
+		ret = ghost_prep_task(e, p, false);
 	}
 
 	return ret;
@@ -6545,6 +6543,29 @@ static void destroy_enclave(struct kernfs_open_file *ctl_of)
 	ghost_destroy_enclave(e);
 }
 
+static int ctl_become_agent(struct kernfs_open_file *of, int qfd)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	struct ghost_enclave *old_target;
+	int ret;
+	struct sched_param param = {
+		.sched_priority = qfd,
+	};
+
+	/*
+	 * See _ghost_setscheduler() for the meaning of sched_priority.
+	 * -1 is valid.  It means "give me the default queue".
+	 */
+	if (qfd < -1)
+		return -EBADF;
+
+	old_target = set_target_enclave(e);
+	ret = sched_setscheduler(current, SCHED_GHOST | SCHED_RESET_ON_FORK,
+				 &param);
+	restore_target_enclave(old_target);
+	return ret;
+}
+
 static struct ghost_sw_region *of_to_swr(struct kernfs_open_file *of)
 {
 	return of->kn->priv;
@@ -6640,7 +6661,7 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 			    size_t len, loff_t off)
 {
 	unsigned int arg1, arg2;
-	int err;
+	int err, qfd;
 
 	/*
 	 * Ignore the offset for ctl commands, so userspace doesn't have to
@@ -6655,6 +6676,10 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 		destroy_enclave(of);
 	} else if (sscanf(buf, "create sw_region %u %u", &arg1, &arg2) == 2) {
 		err = create_sw_region(of, arg1, arg2);
+		if (err)
+			return err;
+	} else if (sscanf(buf, "become agent %d", &qfd) == 1) {
+		err = ctl_become_agent(of, qfd);
 		if (err)
 			return err;
 	} else {
@@ -6881,6 +6906,74 @@ static struct kernfs_ops gf_ops_e_switchto_disabled = {
 	.write			= gf_switchto_disabled_write,
 };
 
+static int gf_tasks_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+	unsigned long irq_fl;
+	struct task_struct *t;
+
+	/* TODO: limited to PAGE_SIZE, fixable with seq_{start,next,stop.} */
+	spin_lock_irqsave(&e->lock, irq_fl);
+	list_for_each_entry(t, &e->task_list, ghost.task_list)
+		seq_printf(sf, "%d\n", t->pid);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+
+	return 0;
+}
+
+/*
+ * This file is world writable so that any task can join an enclave.  However,
+ * you must have CAP_SYS_NICE to change the scheduling policy of another thread.
+ * This is checked in the core sched_setscheduler code.
+ */
+static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
+			      size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	struct ghost_enclave *old_target;
+	ssize_t ret;
+	pid_t pid;
+	struct task_struct *t;
+
+	/* See _ghost_setscheduler() for the meaning of sched_priority. */
+	struct sched_param param = {
+		.sched_priority = -2,
+	};
+
+	ret = kstrtoint(buf, 0, &pid);
+	if (ret)
+		return ret;
+
+	rcu_read_lock();
+	if (pid) {
+		t = find_task_by_vpid(pid);
+		if (!t) {
+			ret = -ESRCH;
+			goto out;
+		}
+	} else {
+		t = current;
+	}
+
+	old_target = set_target_enclave(e);
+	ret = sched_setscheduler(t, SCHED_GHOST, &param);
+	if (ret == 0)
+		ret = len;
+	restore_target_enclave(old_target);
+
+out:
+	rcu_read_unlock();
+
+	return ret;
+}
+
+static struct kernfs_ops gf_ops_e_tasks = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_tasks_show,
+	.write			= gf_tasks_write,
+};
+
 static int gf_wake_on_waker_cpu_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -6967,6 +7060,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "switchto_disabled",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_switchto_disabled,
+	},
+	{
+		.name		= "tasks",
+		.mode		= 0666,
+		.ops		= &gf_ops_e_tasks,
 	},
 	{
 		.name		= "wake_on_waker_cpu",
