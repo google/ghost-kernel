@@ -1076,10 +1076,6 @@ struct rq {
 	struct cfs_rq		cfs;
 	struct rt_rq		rt;
 	struct dl_rq		dl;
-#ifdef CONFIG_SCHED_CLASS_GHOST
-	struct ghost_rq ghost;
-#endif
-
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this CPU: */
 	struct list_head	leaf_cfs_rq_list;
@@ -1211,6 +1207,10 @@ struct rq {
 #endif
 	unsigned int		push_busy;
 	struct cpu_stop_work	push_work;
+
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	struct ghost_rq ghost;
+#endif
 };
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
