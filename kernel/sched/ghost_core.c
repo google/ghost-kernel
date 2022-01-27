@@ -1074,7 +1074,7 @@ BPF_CALL_1(bpf_ghost_wake_agent, u32, cpu)
 	 * similar to syscall numbers.  Catch any ABI inconsistencies between
 	 * prodkernel and open source.
 	 */
-	BUILD_BUG_ON(BPF_FUNC_ghost_wake_agent != 204);
+	BUILD_BUG_ON(BPF_FUNC_ghost_wake_agent != 3000);
 
 	e = get_target_enclave();
 
@@ -1103,7 +1103,7 @@ BPF_CALL_3(bpf_ghost_run_gtid, s64, gtid, u32, task_barrier, int, run_flags)
 	 * similar to syscall numbers.  Catch any ABI inconsistencies between
 	 * prodkernel and open source.
 	 */
-	BUILD_BUG_ON(BPF_FUNC_ghost_run_gtid != 205);
+	BUILD_BUG_ON(BPF_FUNC_ghost_run_gtid != 3001);
 
 	e = get_target_enclave();
 
@@ -1130,7 +1130,7 @@ BPF_CALL_2(bpf_ghost_resched_cpu, u32, cpu, u64, cpu_seqnum)
 
 	VM_BUG_ON(preemptible());
 
-	BUILD_BUG_ON(BPF_FUNC_ghost_resched_cpu != 206);
+	BUILD_BUG_ON(BPF_FUNC_ghost_resched_cpu != 3002);
 
 	e = get_target_enclave();
 

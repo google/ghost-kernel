@@ -562,7 +562,7 @@ class PrinterHelpers(Printer):
 
         # Ghost hack: the len of seen_helpers determines the func_id we print.
         # Extend it to __BPF_FUNC_GHOST_BASE - 1
-        to_len = 204 - 1
+        to_len = 3000 - 1
         if "bpf_ghost" in proto['name'] and len(self.seen_helpers) < to_len:
             for i in range(0, to_len - len(self.seen_helpers)):
                 self.seen_helpers.add("fake_" + str(i))

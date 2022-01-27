@@ -200,7 +200,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_EXT,
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
-	BPF_PROG_TYPE_GHOST_SCHED = 35,
+	BPF_PROG_TYPE_GHOST_SCHED = 1000,
 	BPF_PROG_TYPE_GHOST_MSG,
 };
 
@@ -243,7 +243,7 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
-	BPF_GHOST_SCHED_SKIP_TICK = 50,
+	BPF_GHOST_SCHED_SKIP_TICK = 2000,
 	BPF_GHOST_SCHED_PNT,
 	BPF_GHOST_MSG_SEND,
 	__MAX_BPF_ATTACH_TYPE
@@ -4045,7 +4045,7 @@ enum bpf_func_id {
  *		0 on success, < 0 on error.
  */
 enum {
-	__BPF_FUNC_GHOST_BASE = 204,
+	__BPF_FUNC_GHOST_BASE = 3000,
 	BPF_FUNC_ghost_wake_agent = __BPF_FUNC_GHOST_BASE,
 	BPF_FUNC_ghost_run_gtid,
 	BPF_FUNC_ghost_resched_cpu,

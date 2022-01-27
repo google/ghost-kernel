@@ -4039,7 +4039,7 @@ enum bpf_func_id {
  *		0 on success, < 0 on error.
  */
 enum {
-	__BPF_FUNC_GHOST_BASE = 204,
+	__BPF_FUNC_GHOST_BASE = 3000,
 	BPF_FUNC_ghost_wake_agent = __BPF_FUNC_GHOST_BASE,
 	BPF_FUNC_ghost_run_gtid,
 	BPF_FUNC_ghost_resched_cpu,
