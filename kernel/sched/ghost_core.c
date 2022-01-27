@@ -459,73 +459,6 @@ void __init init_sched_ghost_class(void)
 		per_cpu(sync_group_cookie, cpu) = cpu << SG_COOKIE_CPU_SHIFT;
 }
 
-/*
- * Helper to get an fd and translate it to an enclave.  Ghostfs will maintain a
- * kref on the enclave.  That kref is increffed when the file was opened, and
- * that kref is maintained by this call (a combination of fdget and
- * kernfs_get_active).  Once you call ghost_fdput_enclave(), the enclave kref
- * can be released.
- *
- * Returns NULL if there is not a ghost_enclave for this FD, which could be due
- * to concurrent enclave destruction.
- *
- * Caller must call ghost_fdput_enclave with e and &fd_to_put, even on error.
- */
-static struct ghost_enclave *ghost_fdget_enclave(int fd, struct fd *fd_to_put)
-{
-	const struct ghost_abi *abi;
-	struct ghost_enclave *e = NULL;
-
-	static const struct ghost_abi *last_abi;
-
-	*fd_to_put = fdget(fd);
-	if (!fd_to_put->file)
-		return NULL;
-
-	/*
-	 * Try the ABI that we last used successfully to first do the lookup.
-	 *
-	 * In the common case of a single active enclave we avoid looping over
-	 * all the ABIs compiled into the kernel.
-	 */
-	abi = READ_ONCE(last_abi);
-	if (abi) {
-		e = abi->ctlfd_enclave_get(fd_to_put->file);
-		if (e)
-			return e;
-	}
-
-	for_each_abi(abi) {
-		e = abi->ctlfd_enclave_get(fd_to_put->file);
-		if (e) {
-			/*
-			 * Update 'last_abi' if necessary.
-			 *
-			 * N.B. multiple CPUs may race to mutate 'last_abi'
-			 * concurrently. This is okay as long as each update
-			 * is atomic (i.e. last_abi always points to a valid
-			 * abi).
-			 */
-			if (abi != READ_ONCE(last_abi))
-				WRITE_ONCE(last_abi, abi);
-
-			break;
-		}
-	}
-	return e;
-}
-
-/*
- * Pairs with calls to ghost_fdget_enclave().  You can't call this while holding
- * the rq lock.
- */
-static void ghost_fdput_enclave(struct ghost_enclave *e, struct fd *fd)
-{
-	if (e)
-		e->abi->ctlfd_enclave_put(fd->file);
-	fdput(*fd);
-}
-
 int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		       const struct sched_attr *attr,
 		       int *reset_on_fork)
@@ -1289,125 +1222,22 @@ const struct bpf_verifier_ops ghost_msg_verifier_ops = {
 
 const struct bpf_prog_ops ghost_msg_prog_ops = {};
 
-struct bpf_ghost_link {
-	struct bpf_link	link;
-	struct ghost_enclave *e;
-	enum bpf_prog_type prog_type;
+int ghost_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	const struct ghost_abi *abi;
 	enum bpf_attach_type ea_type;
-};
+	int ea_abi;
 
-static void bpf_ghost_link_dealloc(struct bpf_link *link)
-{
-	struct bpf_ghost_link *sc_link =
-		container_of(link, struct bpf_ghost_link, link);
-
-	kfree(sc_link);
-}
-
-static void bpf_ghost_link_release(struct bpf_link *link)
-{
-	struct bpf_ghost_link *sc_link =
-		container_of(link, struct bpf_ghost_link, link);
-	struct ghost_enclave *e = sc_link->e;
-
-	if (WARN_ONCE(!e, "Missing enclave for bpf link ea_type %d!",
-		      sc_link->ea_type))
-		return;
-
-	e->abi->bpf_link_detach(e, link->prog,
-				sc_link->prog_type, sc_link->ea_type);
-
-	kref_put(&e->kref, e->abi->enclave_release);
-	sc_link->e = NULL;
-}
-
-static const struct bpf_link_ops bpf_ghost_link_ops = {
-	.release = bpf_ghost_link_release,
-	.dealloc = bpf_ghost_link_dealloc,
-};
-
-int ghost_bpf_link_attach(const union bpf_attr *attr,
-			  struct bpf_prog *prog)
-{
-	struct bpf_link_primer link_primer;
-	struct bpf_ghost_link *sc_link;
-	enum bpf_attach_type ea_type;
-	struct ghost_enclave *e;
-	struct fd f_enc = {0};
-	int err, ea_abi;
-
+	ea_type = bpf_prog_eat_type(prog);
+	ea_abi = bpf_prog_eat_abi(prog);
 	if (attr->link_create.flags)
 		return -EINVAL;
 	if (prog->expected_attach_type != attr->link_create.attach_type)
 		return -EINVAL;
 
-	/* Mask the ABI value encoded in the upper 16 bits. */
-	ea_type = bpf_prog_eat_type(prog);
-	ea_abi = bpf_prog_eat_abi(prog);
-
-	switch (prog->type) {
-	case BPF_PROG_TYPE_GHOST_SCHED:
-		switch (ea_type) {
-		case BPF_GHOST_SCHED_SKIP_TICK:
-		case BPF_GHOST_SCHED_PNT:
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case BPF_PROG_TYPE_GHOST_MSG:
-		switch (ea_type) {
-		case BPF_GHOST_MSG_SEND:
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	sc_link = kzalloc(sizeof(*sc_link), GFP_USER);
-	if (!sc_link)
-		return -ENOMEM;
-	bpf_link_init(&sc_link->link, BPF_LINK_TYPE_UNSPEC,
-		      &bpf_ghost_link_ops, prog);
-	sc_link->prog_type = prog->type;
-	sc_link->ea_type = ea_type;
-
-	err = bpf_link_prime(&sc_link->link, &link_primer);
-	if (err) {
-		kfree(sc_link);
-		return -EINVAL;
-	}
-
-	e = ghost_fdget_enclave(attr->link_create.target_fd, &f_enc);
-	if (!e || ea_abi != enclave_abi(e)) {
-		ghost_fdput_enclave(e, &f_enc);
-		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
-		bpf_link_cleanup(&link_primer);
+	abi = ghost_abi_lookup(ea_abi);
+	if (!abi)
 		return -EBADF;
-	}
-
-	/*
-	 * On success, sc_link will hold a kref on the enclave, which will get
-	 * put when the link's FD is closed (and thus bpf_link_put ->
-	 * bpf_link_free -> our release).  This is similar to how ghostfs files
-	 * hold a kref on the enclave.  Release is not called on failure.
-	 */
-	kref_get(&e->kref);
-	sc_link->e = e;
-	ghost_fdput_enclave(e, &f_enc);
-
-	err = e->abi->bpf_link_attach(e, prog, prog->type, ea_type);
-
-	if (err) {
-		/* bpf_link_cleanup() triggers .dealloc, but not .release. */
-		bpf_link_cleanup(&link_primer);
-		kref_put(&e->kref, e->abi->enclave_release);
-		return err;
-	}
-
-	return bpf_link_settle(&link_primer);
+	return abi->bpf_link_attach(attr, prog, ea_type, ea_abi);
 }
 #endif

@@ -2178,8 +2178,6 @@ struct ghost_abi {
 				  struct kernfs_node *dir, ulong id);
 	void (*enclave_release)(struct kref *k);
 	void (*enclave_add_cpu)(struct ghost_enclave *e, int cpu);
-	struct ghost_enclave *(*ctlfd_enclave_get)(struct file *file);
-	void (*ctlfd_enclave_put)(struct file *file);
 	int (*setscheduler)(struct ghost_enclave *e, struct task_struct *p,
 			    struct rq *rq, const struct sched_attr *attr,
 			    int *reset_on_fork);
@@ -2203,10 +2201,9 @@ struct ghost_abi {
 					  enum bpf_access_type type,
 					  const struct bpf_prog *prog,
 					  struct bpf_insn_access_aux *info);
-	int (*bpf_link_attach)(struct ghost_enclave *e, struct bpf_prog *prog,
-			       int prog_type, int attach_type);
-	void (*bpf_link_detach)(struct ghost_enclave *e, struct bpf_prog *prog,
-			        int prog_type, int attach_type);
+	int (*bpf_link_attach)(const union bpf_attr *attr,
+			       struct bpf_prog *prog,
+			       int ea_type, int ea_abi);
 
 	/* ghost_agent_sched_class callbacks */
 	struct task_struct *(*pick_next_ghost_agent)(struct rq *rq);
