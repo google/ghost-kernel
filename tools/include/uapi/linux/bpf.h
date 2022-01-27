@@ -4007,6 +4007,45 @@ enum bpf_func_id {
 };
 #undef __BPF_ENUM_FN
 
+/*
+ * The formatting of these is particular so that bpf_doc.py can parse them, just
+ * like the normal BPF helper descriptions.  The first function needs to be
+ * called bpf_ghost.  If you change __BPF_FUNC_GHOST_BASE, change bpf_doc.py
+ * too.
+ *
+ * Start of Ghost BPF helper function descriptions:
+ *
+ * long bpf_ghost_wake_agent(u32 cpu)
+ *	Description
+ *		Wakes the ghost agent on **cpu**.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_run_gtid(s64 gtid, u32 task_barrier, s32 run_flags)
+ *	Description
+ *		Runs (latches) task **gtid** on this cpu.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_resched_cpu(u32 cpu, u64 cpu_seqnum)
+ *	Description
+ *		Reschedules **cpu** if its state is still **cpu_seqnum**, such
+ *		that it calls pick_next_task and will not pick prev again.
+ *		Typically, it will run BPF-PNT.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ */
+enum {
+	__BPF_FUNC_GHOST_BASE = 204,
+	BPF_FUNC_ghost_wake_agent = __BPF_FUNC_GHOST_BASE,
+	BPF_FUNC_ghost_run_gtid,
+	BPF_FUNC_ghost_resched_cpu,
+	__BPF_FUNC_GHOST_MAX_ID,
+};
+
 /* All flags used by eBPF helper functions, placed here. */
 
 /* BPF_FUNC_skb_store_bytes flags. */

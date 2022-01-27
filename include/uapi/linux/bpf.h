@@ -3836,29 +3836,6 @@ union bpf_attr {
  *		A pointer to a struct socket on success or NULL if the file is
  *		not a socket.
  *
- * long bpf_ghost_wake_agent(u32 cpu)
- *	Description
- *		Wakes the ghost agent on *cpu*
- *
- *	Return
- *		0 on success, < 0 on error.
- *
- * long bpf_ghost_run_gtid(s64 gtid, u32 task_barrier, s32 run_flags)
- *	Description
- *		Runs (latches) task **gtid** on this cpu.
- *
- *	Return
- *		0 on success, < 0 on error.
- *
- * long bpf_ghost_resched_cpu(u32 cpu, u64 cpu_seqnum)
- *	Description
- *		Reschedules **cpu** if its state is still **cpu_seqnum**, such
- *		that it calls pick_next_task and will not pick prev again.
- *		Typically, it will run BPF-PNT.
- *
- *	Return
- *		0 on success, < 0 on error.
- *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4024,50 +4001,6 @@ union bpf_attr {
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
-	FN(placeholder_998),		\
-	FN(placeholder_999),		\
-	FN(placeholder_001),		\
-	FN(placeholder_002),		\
-	FN(placeholder_003),		\
-	FN(placeholder_004),		\
-	FN(placeholder_005),		\
-	FN(placeholder_006),		\
-	FN(placeholder_007),		\
-	FN(placeholder_008),		\
-	FN(placeholder_009),		\
-	FN(placeholder_010),		\
-	FN(placeholder_011),		\
-	FN(placeholder_012),		\
-	FN(placeholder_013),		\
-	FN(placeholder_014),		\
-	FN(placeholder_015),		\
-	FN(placeholder_016),		\
-	FN(placeholder_017),		\
-	FN(placeholder_018),		\
-	FN(placeholder_019),		\
-	FN(placeholder_020),		\
-	FN(placeholder_021),		\
-	FN(placeholder_022),		\
-	FN(placeholder_023),		\
-	FN(placeholder_024),		\
-	FN(placeholder_025),		\
-	FN(placeholder_026),		\
-	FN(placeholder_027),		\
-	FN(placeholder_028),		\
-	FN(placeholder_029),		\
-	FN(placeholder_030),		\
-	FN(placeholder_031),		\
-	FN(placeholder_032),		\
-	FN(placeholder_033),		\
-	FN(placeholder_034),		\
-	FN(placeholder_035),		\
-	FN(placeholder_036),		\
-	FN(placeholder_037),		\
-	FN(placeholder_038),		\
-	FN(placeholder_039),		\
-	FN(ghost_wake_agent),		\
-	FN(ghost_run_gtid),		\
-	FN(ghost_resched_cpu),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4079,6 +4012,45 @@ enum bpf_func_id {
 	__BPF_FUNC_MAX_ID,
 };
 #undef __BPF_ENUM_FN
+
+/*
+ * The formatting of these is particular so that bpf_doc.py can parse them, just
+ * like the normal BPF helper descriptions.  The first function needs to be
+ * called bpf_ghost.  If you change __BPF_FUNC_GHOST_BASE, change bpf_doc.py
+ * too.
+ *
+ * Start of Ghost BPF helper function descriptions:
+ *
+ * long bpf_ghost_wake_agent(u32 cpu)
+ *	Description
+ *		Wakes the ghost agent on **cpu**.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_run_gtid(s64 gtid, u32 task_barrier, s32 run_flags)
+ *	Description
+ *		Runs (latches) task **gtid** on this cpu.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_resched_cpu(u32 cpu, u64 cpu_seqnum)
+ *	Description
+ *		Reschedules **cpu** if its state is still **cpu_seqnum**, such
+ *		that it calls pick_next_task and will not pick prev again.
+ *		Typically, it will run BPF-PNT.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
+ */
+enum {
+	__BPF_FUNC_GHOST_BASE = 204,
+	BPF_FUNC_ghost_wake_agent = __BPF_FUNC_GHOST_BASE,
+	BPF_FUNC_ghost_run_gtid,
+	BPF_FUNC_ghost_resched_cpu,
+	__BPF_FUNC_GHOST_MAX_ID,
+};
 
 /* All flags used by eBPF helper functions, placed here. */
 

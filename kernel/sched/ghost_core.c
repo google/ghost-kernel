@@ -1154,7 +1154,8 @@ ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	int eat = bpf_prog_eat_type(prog);
 
-	switch (func_id) {
+	/* ghost func_ids are not in enum bpf_func_id */
+	switch ((int)func_id) {
 	case BPF_FUNC_ghost_wake_agent:
 		return &bpf_ghost_wake_agent_proto;
 	case BPF_FUNC_ghost_run_gtid:
@@ -1191,7 +1192,8 @@ const struct bpf_prog_ops ghost_sched_prog_ops = {};
 static const struct bpf_func_proto *
 ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
-	switch (func_id) {
+	/* ghost func_ids are not in enum bpf_func_id */
+	switch ((int)func_id) {
 	case BPF_FUNC_ghost_wake_agent:
 		return &bpf_ghost_wake_agent_proto;
 	case BPF_FUNC_ghost_resched_cpu:
