@@ -7134,7 +7134,7 @@ static int __init abi_init(const struct ghost_abi *abi)
 
 static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 					    struct kernfs_node *dir,
-					    ulong id)
+					    ulong id, const char *cmd_extra)
 {
 	bool vmalloc_failed = false;
 	struct ghost_enclave *e;

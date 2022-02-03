@@ -58,7 +58,7 @@ static const struct ghost_abi *ghost_abi_lookup(uint version)
 }
 
 static int make_enclave(struct kernfs_node *parent, unsigned long id,
-			unsigned int version)
+			unsigned int version, const char *cmd_extra)
 {
 	struct kernfs_node *dir;
 	struct ghost_enclave *e;
@@ -82,7 +82,7 @@ static int make_enclave(struct kernfs_node *parent, unsigned long id,
 	 * discoverable, usable, or otherwise hooked into the kernel until
 	 * kernfs_active().
 	 */
-	e = abi->create_enclave(abi, dir, id);
+	e = abi->create_enclave(abi, dir, id, cmd_extra);
 	if (IS_ERR(e)) {
 		kernfs_remove(dir);	/* recursive */
 		return PTR_ERR(e);
@@ -106,14 +106,17 @@ static ssize_t gf_top_ctl_write(struct kernfs_open_file *of, char *buf,
 	struct kernfs_node *top_dir = ctl->parent;
 	unsigned long x;
 	unsigned int abi_num;
-	int ret;
+	int ret, so_far;
 
 	gf_strip_slash_n(buf, len);
 
-	/* This will ignore any extra digits or characters beyond the %u. */
-	ret = sscanf(buf, "create %lu %u", &x, &abi_num);
+	/*
+	 * Any extra spaces, digits, or characters beyond the abi_num are passed
+	 * to the abi's create_enclave().
+	 */
+	ret = sscanf(buf, "create %lu %u%n", &x, &abi_num, &so_far);
 	if (ret == 2) {
-		ret = make_enclave(top_dir, x, abi_num);
+		ret = make_enclave(top_dir, x, abi_num, buf + so_far);
 		return ret ? ret : len;
 	}
 
