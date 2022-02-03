@@ -6631,7 +6631,8 @@ static int create_sw_region(struct kernfs_open_file *ctl_of, unsigned int id,
 		goto err_snprintf;
 	}
 
-	swr_kn = kernfs_create_file(dir, name, 0440, 0, &gf_ops_e_swr, e);
+	swr_kn = kernfs_create_file_ns(dir, name, 0440, e->uid, e->gid, 0,
+				       &gf_ops_e_swr, e, NULL);
 	if (IS_ERR(swr_kn)) {
 		err = PTR_ERR(swr_kn);
 		goto err_create_kn;
@@ -7076,18 +7077,19 @@ static struct gf_dirent enclave_dirtab[] = {
 
 /* Caller is responsible for cleanup.  Removing the parent will suffice. */
 static int gf_add_files(struct kernfs_node *parent, struct gf_dirent *dirtab,
-			struct ghost_enclave *priv)
+			struct ghost_enclave *e)
 {
 	struct gf_dirent *gft;
 	struct kernfs_node *kn;
 
 	for (gft = dirtab; gft->name; gft++) {
 		if (gft->is_dir) {
-			kn = kernfs_create_dir(parent, gft->name, gft->mode,
-					       NULL);
+			kn = kernfs_create_dir_ns(parent, gft->name, gft->mode,
+						  e->uid, e->gid, NULL, NULL);
 		} else {
-			kn = kernfs_create_file(parent, gft->name, gft->mode,
-						gft->size, gft->ops, priv);
+			kn = kernfs_create_file_ns(parent, gft->name, gft->mode,
+						   e->uid, e->gid, gft->size,
+						   gft->ops, e, NULL);
 		}
 		if (IS_ERR(kn))
 			return PTR_ERR(kn);
@@ -7130,6 +7132,19 @@ static int __init abi_init(const struct ghost_abi *abi)
 
 	runtime_adjust_dirtabs();
 	return 0;
+}
+
+static kgid_t parse_cmd_gid(const char *cmd_extra)
+{
+	gid_t gid;
+	kgid_t kgid = GLOBAL_ROOT_GID;
+	int ret;
+
+	/* sscanf will snarf the leading whitespace, unlike kstrtoint. */
+	ret = sscanf(cmd_extra, "%u", &gid);
+	if (ret == 1)
+		kgid = KGIDT_INIT(gid);
+	return kgid;
 }
 
 static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
@@ -7183,6 +7198,14 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 		kfree(e->cpu_data);
 		kfree(e);
 		return ERR_PTR(-ENOMEM);
+	}
+
+	e->uid = current_euid();
+	e->gid = parse_cmd_gid(cmd_extra);
+	ret = ghostfs_set_ugid(dir, e->uid, e->gid);
+	if (ret) {
+		kref_put(&e->kref, enclave_release);
+		return ERR_PTR(ret);
 	}
 
 	ret = gf_add_files(dir, enclave_dirtab, e);

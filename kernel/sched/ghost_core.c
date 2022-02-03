@@ -45,6 +45,26 @@ static void gf_strip_slash_n(char *buf, size_t count)
 		*n = '\0';
 }
 
+/* Helper to set the uid/gid of a kn */
+int ghostfs_set_ugid(struct kernfs_node *kn, kuid_t uid, kgid_t gid)
+{
+	struct iattr iattr = { .ia_valid = ATTR_UID | ATTR_GID,
+			       .ia_uid = uid,
+			       .ia_gid = gid, };
+
+	/*
+	 * cgroup_kn_set_ugid() returns immediately if uid == gid == 0.  That
+	 * will work if we know the old uid/gid are 0, such as when a file is
+	 * first created (default is GLOBAL_ROOT, both when making a new attr as
+	 * well as if there are no attrs).
+	 *
+	 * In case we reuse this function for changing a kn from something else
+	 * back to GLOBAL_ROOT, always call kernfs_setattr().
+	 */
+
+	return kernfs_setattr(kn, &iattr);
+}
+
 static const struct ghost_abi *ghost_abi_lookup(uint version)
 {
 	const struct ghost_abi *abi;

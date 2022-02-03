@@ -197,6 +197,8 @@ struct ghost_enclave {
 	int is_dying;
 	bool agent_online;		/* userspace says agent can schedule. */
 	struct kernfs_node *enclave_dir;
+	kuid_t uid;
+	kgid_t gid;
 
 #ifdef CONFIG_BPF
 	struct bpf_prog *bpf_tick;
@@ -2264,6 +2266,8 @@ _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 struct ghost_enclave *get_target_enclave(void);
 struct ghost_enclave *set_target_enclave(struct ghost_enclave *e);
 void restore_target_enclave(struct ghost_enclave *old);
+
+int ghostfs_set_ugid(struct kernfs_node *kn, kuid_t uid, kgid_t gid);
 
 void init_sched_ghost_class(void);
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
