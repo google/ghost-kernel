@@ -838,6 +838,8 @@ static bool check_runnable_timeout(struct ghost_enclave *e, struct rq *rq)
 		if (ktime_before(ktime_add_safe(p->ghost.last_runnable_at,
 						timeout),
 				 ktime_get())) {
+			pr_info("enclave violation: enclave_%lu failed to run pid %u for over %lums\n",
+				e->id, p->pid, ktime_to_ms(timeout));
 			ok = false;
 		}
 
@@ -852,16 +854,8 @@ static void tick_handler(struct ghost_enclave *e, struct rq *rq)
 {
 	if (READ_ONCE(e->commit_at_tick))
 		ghost_commit_all_greedy_txns();
-	if (!check_runnable_timeout(e, rq)) {
-		kref_get(&e->kref);
-		if (!schedule_work(&e->enclave_destroyer)) {
-			/*
-			 * Safe since it is not the last reference, due
-			 * to RCU protecting per_cpu(enclave).
-			 */
-			kref_put(&e->kref, enclave_release);
-		}
-	}
+	if (!check_runnable_timeout(e, rq))
+		ghost_destroy_enclave(e);
 }
 
 static void _task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
@@ -1935,24 +1929,13 @@ next_item:
 	kref_put(&e->kref, enclave_release);
 }
 
-/* Helper work, which we can kick from IRQ context. */
-static void enclave_destroyer(struct work_struct *work)
-{
-	struct ghost_enclave *e = container_of(work, struct ghost_enclave,
-					       enclave_destroyer);
-
-	pr_info("Killing enclave %lu for a violation\n", e->id);
-	ghost_destroy_enclave(e);
-	kref_put(&e->kref, enclave_release);
-}
-
 /*
  * Here we can trigger any destruction we want, such as killing agents, kicking
  * tasks to CFS, etc.  Undo things that were done at runtime.
  *
  * The enclave itself isn't freed until enclave_release().
  */
-static void ghost_destroy_enclave(struct ghost_enclave *e)
+static void __ghost_destroy_enclave(struct ghost_enclave *e)
 {
 	ulong flags;
 	int cpu;
@@ -2071,6 +2054,26 @@ static void ghost_destroy_enclave(struct ghost_enclave *e)
 	kernfs_remove(e->enclave_dir);
 
 	kref_put(&e->kref, enclave_release);
+}
+
+static void enclave_destroyer(struct work_struct *work)
+{
+	struct ghost_enclave *e = container_of(work, struct ghost_enclave,
+					       enclave_destroyer);
+
+	__ghost_destroy_enclave(e);
+	kref_put(&e->kref, enclave_release);
+}
+
+static void ghost_destroy_enclave(struct ghost_enclave *e)
+{
+	/*
+	 * Defer destruction to a CFS task.  Need this in case we're in IRQ ctx
+	 * or if current is in the enclave.
+	 */
+	kref_get(&e->kref);
+	if (!schedule_work(&e->enclave_destroyer))
+		kref_put(&e->kref, enclave_release);
 }
 
 /*
@@ -3107,7 +3110,7 @@ static struct task_struct *find_task_by_gtid(gtid_t gtid)
 	 * A dying task ensures that the task_struct will remain stable for
 	 * an rcu grace period via call_rcu(ghost_delayed_put_task_struct).
 	 *
-	 * A dying enclave will synchronize_rcu() in ghost_destroy_enclave()
+	 * A dying enclave will synchronize_rcu() in __ghost_destroy_enclave()
 	 * before moving its tasks out of ghost (we don't use call_rcu() here
 	 * because the task may transition in and out of ghost any number of
 	 * times independent of call_rcu() invocation).
@@ -4295,7 +4298,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		 */
 		ghost_claim_and_kill_txn(rq->cpu, GHOST_TXN_NO_AGENT);
 
-		/* See ghost_destroy_enclave() */
+		/* See __ghost_destroy_enclave() */
 		if (p->ghost.__agent_decref_enclave) {
 			/* Agents should only exit, never setsched out. */
 			WARN_ON_ONCE(p->state != TASK_DEAD);
@@ -4339,7 +4342,7 @@ static void ghost_delayed_put_task_struct(struct rcu_head *rhp)
 					       ghost.rcu);
 	/*
 	 * Step 3 of "destroyed with agent": decref.
-	 * See ghost_destroy_enclave().
+	 * See __ghost_destroy_enclave().
 	 */
 	if (tsk->ghost.__agent_decref_enclave) {
 		kref_put(&tsk->ghost.__agent_decref_enclave->kref,
