@@ -192,6 +192,7 @@ struct ghost_enclave {
 	bool switchto_disabled;
 	bool wake_on_waker_cpu;
 	bool commit_at_tick;
+	bool deliver_ticks;
 
 	unsigned long id;
 	int is_dying;
@@ -201,7 +202,6 @@ struct ghost_enclave {
 	kgid_t gid;
 
 #ifdef CONFIG_BPF
-	struct bpf_prog *bpf_tick;
 	struct bpf_prog *bpf_pnt;
 	struct bpf_prog *bpf_msg_send;
 #endif

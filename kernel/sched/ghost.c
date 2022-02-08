@@ -136,26 +136,6 @@ static inline bool enclave_is_reapable(struct ghost_enclave *e)
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
-static bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
-{
-	struct bpf_ghost_sched_kern ctx = {};
-	struct bpf_prog *prog;
-	struct ghost_enclave *old_target;
-	bool ret;
-
-	lockdep_assert_held(&rq->lock);
-
-	prog = rcu_dereference(e->bpf_tick);
-	if (!prog)
-		return false;
-
-	old_target = set_target_enclave(e);
-	/* prog returns 1 if we want a tick on this cpu. */
-	ret = BPF_PROG_RUN(prog, &ctx) != 1;
-	restore_target_enclave(old_target);
-	return ret;
-}
-
 #define BPF_GHOST_PNT_DONT_IDLE		1
 
 static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
@@ -229,10 +209,6 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 	return send;
 }
 #else
-static inline bool ghost_bpf_skip_tick(struct ghost_enclave *e, struct rq *rq)
-{
-	return false;
-}
 
 static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 				 struct rq_flags *rf)
@@ -3816,7 +3792,7 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 		return false;
 	rcu_read_lock();
 	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
-	if (!e || ghost_bpf_skip_tick(e, rq)) {
+	if (!e || !e->deliver_ticks) {
 		rcu_read_unlock();
 		return false;
 	}
@@ -6772,6 +6748,37 @@ static struct kernfs_ops gf_ops_e_ctl = {
 	.ioctl			= gf_ctl_ioctl,
 };
 
+static int gf_deliver_ticks_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->deliver_ticks));
+	return 0;
+}
+
+static ssize_t gf_deliver_ticks_write(struct kernfs_open_file *of,
+				      char *buf, size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->deliver_ticks, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_deliver_ticks = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_deliver_ticks_show,
+	.write			= gf_deliver_ticks_write,
+};
+
 /*
  * Returns a kreffed pointer for the enclave for f, if f is a ghostfs ctl file.
  * NULL otherwise.
@@ -7049,6 +7056,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "ctl",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_ctl,
+	},
+	{
+		.name		= "deliver_ticks",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_deliver_ticks,
 	},
 	{
 		.name		= "runnable_timeout",
@@ -7427,31 +7439,6 @@ static bool ghost_msg_is_valid_access(int off, int size,
 	return true;
 }
 
-static int ghost_sched_tick_attach(struct ghost_enclave *e,
-				   struct bpf_prog *prog)
-{
-	unsigned long irq_fl;
-
-	spin_lock_irqsave(&e->lock, irq_fl);
-	if (e->bpf_tick) {
-		spin_unlock_irqrestore(&e->lock, irq_fl);
-		return -EBUSY;
-	}
-	rcu_assign_pointer(e->bpf_tick, prog);
-	spin_unlock_irqrestore(&e->lock, irq_fl);
-	return 0;
-}
-
-static void ghost_sched_tick_detach(struct ghost_enclave *e,
-				    struct bpf_prog *prog)
-{
-	unsigned long irq_fl;
-
-	spin_lock_irqsave(&e->lock, irq_fl);
-	rcu_replace_pointer(e->bpf_tick, NULL, lockdep_is_held(&e->lock));
-	spin_unlock_irqrestore(&e->lock, irq_fl);
-}
-
 static int ghost_sched_pnt_attach(struct ghost_enclave *e,
 				  struct bpf_prog *prog)
 {
@@ -7510,9 +7497,6 @@ static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 	switch (prog_type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
 		switch (attach_type) {
-		case BPF_GHOST_SCHED_SKIP_TICK:
-			err = ghost_sched_tick_attach(e, prog);
-			break;
 		case BPF_GHOST_SCHED_PNT:
 			err = ghost_sched_pnt_attach(e, prog);
 			break;
@@ -7547,9 +7531,6 @@ static void bpf_link_detach(struct ghost_enclave *e, struct bpf_prog *prog,
 	switch (prog_type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
 		switch (attach_type) {
-		case BPF_GHOST_SCHED_SKIP_TICK:
-			ghost_sched_tick_detach(e, prog);
-			break;
 		case BPF_GHOST_SCHED_PNT:
 			ghost_sched_pnt_detach(e, prog);
 			break;
@@ -7625,7 +7606,6 @@ static int _ghost_bpf_link_attach(const union bpf_attr *attr,
 	switch (prog->type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
 		switch (ea_type) {
-		case BPF_GHOST_SCHED_SKIP_TICK:
 		case BPF_GHOST_SCHED_PNT:
 			break;
 		default:
