@@ -5160,6 +5160,11 @@ struct bpf_sk_lookup {
 	__u32 local_port;	/* Host byte order */
 };
 
+#define GHOST_BPF
+
+struct bpf_ghost_sched {
+};
+
 /*
  * struct btf_ptr is used for typed pointer representation; the
  * type id is used to render the pointer data as the appropriate type
