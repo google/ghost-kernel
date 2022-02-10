@@ -3341,9 +3341,10 @@ done:
 	if (p)
 		task_rq_unlock(rq, p, &rf);
 	fput(file);
-	/* TODO(b/202070945) */
-	if (!error)
-		error = put_user(status, &arg->status);
+	if (!error) {
+		WARN_ON_ONCE(status < 0);
+		return status;
+	}
 
 	return error;
 }
