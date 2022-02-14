@@ -427,7 +427,12 @@ static struct ghost_enclave *_ghost_resolve_enclave(struct rq *rq,
 	 * while the cpu it is running on belongs to enclave Y. This is not
 	 * supported properly yet hence the VM_BUG_ON.
 	 */
+#if 0	// FIXME(b/218869667)
 	VM_BUG_ON(rq_enclave && task_enclave && rq_enclave != task_enclave);
+#else
+	VM_BUG_ON(rq_enclave && task_enclave &&
+		  rq_enclave->abi != task_enclave->abi);
+#endif
 
 	/*
 	 * 'rq_enclave' may be NULL if a running task enters ghost on a cpu
