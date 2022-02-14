@@ -549,11 +549,19 @@ static inline void schedule_agent(struct rq *rq, bool resched)
 	schedule_next(rq, GHOST_AGENT_GTID, resched);
 }
 
-static inline void force_offcpu(struct rq *rq, bool resched)
+static inline void _force_offcpu(struct rq *rq, bool resched,
+				 bool ignore_prev_preemption)
 {
 	VM_BUG_ON(!ghost_class(rq->curr->sched_class));
 
+	rq->ghost.ignore_prev_preemption = ignore_prev_preemption;
+
 	schedule_next(rq, GHOST_NULL_GTID, resched);
+}
+
+static inline void force_offcpu(struct rq *rq, bool resched)
+{
+	_force_offcpu(rq, resched, /*ignore_prev_preemption=*/false);
 }
 
 static void __update_curr_ghost(struct rq *rq, bool update_sw)
@@ -4636,9 +4644,6 @@ static void wait_for_rendezvous(struct rq *rq)
 			/*
 			 * Reschedule immediately if rendezvous is poisoned
 			 * (some other txn in the sync_group failed to commit).
-			 *
-			 * N.B. rescheduling here could produce TASK_PREEMPTED
-			 * msg from 'rq->curr'.
 			 */
 			if (unlikely(rendezvous_poisoned(target))) {
 				struct rq_flags rf;
@@ -4682,8 +4687,9 @@ static void wait_for_rendezvous(struct rq *rq)
 					rq_unlock_irqrestore(rq, &rf);
 					continue;
 				}
-
-				force_offcpu(rq, /*resched=*/true);
+				_force_offcpu(rq,
+					      /*resched=*/true,
+					      /*ignore_prev_preemption=*/true);
 				rq_unlock_irqrestore(rq, &rf);
 				VM_BUG_ON(!need_resched());
 			}
@@ -7099,6 +7105,10 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 {
 	rq->ghost.check_prev_preemption = ghost_produce_prev_msgs(rq, prev);
+	if (unlikely(rq->ghost.ignore_prev_preemption)) {
+		rq->ghost.check_prev_preemption = false;
+		rq->ghost.ignore_prev_preemption = false;
+	}
 
 	/* a negative 'switchto_count' indicates end of the chain */
 	rq->ghost.switchto_count = -rq->ghost.switchto_count;

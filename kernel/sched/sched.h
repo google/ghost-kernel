@@ -109,6 +109,7 @@ struct ghost_rq {
 	bool agent_should_wake;		/* racy reads and writes */
 	uint64_t prev_resched_seq;	/* racy, cpu_seqnum to resched */
 	bool must_resched;		/* rq->curr must reschedule in PNT */
+	bool ignore_prev_preemption;
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
 	bool skip_latched_preemption;
 	bool pnt_bpf_once;		/* BPF runs at most once in PNT */
