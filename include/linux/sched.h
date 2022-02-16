@@ -607,10 +607,11 @@ struct sched_ghost_entity {
 	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
 	 * for flags that are used to defer messages.
 	 */
-	uint blocked_task : 1;
-	uint yield_task : 1;
-	uint new_task   : 1;
-	uint agent      : 1;
+	uint blocked_task		: 1;
+	uint yield_task			: 1;
+	uint new_task			: 1;
+	uint agent			: 1;
+	uint bpf_cannot_load_prog	: 1;
 
 	/*
 	 * Locking of 'twi' is awkward:

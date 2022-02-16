@@ -2091,6 +2091,11 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	char license[128];
 	bool is_gpl;
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (current->group_leader->ghost.bpf_cannot_load_prog)
+		return -EPERM;
+#endif
+
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
 

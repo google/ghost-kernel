@@ -6662,6 +6662,8 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 		err = ctl_become_agent(of, qfd);
 		if (err)
 			return err;
+	} else if (!strcmp(buf, "disable my bpf_prog_load")) {
+		current->group_leader->ghost.bpf_cannot_load_prog = 1;
 	} else {
 		pr_err("%s: bad cmd :%s:", __func__, buf);
 		return -EINVAL;
