@@ -5031,7 +5031,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	struct task_struct *p;
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	ghost_pnt_prologue(rq, prev);
+	ghost_pnt_prologue(rq, prev, rf);
 #endif
 
 	/*

@@ -464,14 +464,15 @@ static struct ghost_enclave *_ghost_resolve_enclave(struct rq *rq,
 	return rq_enclave ? rq_enclave : task_enclave;
 }
 
-void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev)
+void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev,
+			struct rq_flags *rf)
 {
 	struct ghost_enclave *e = _ghost_resolve_enclave(rq, prev);
 
 	VM_BUG_ON(rq != this_rq());
 
 	if (e != NULL)
-		e->abi->pnt_prologue(rq, prev);
+		e->abi->pnt_prologue(rq, prev, rf);
 }
 
 void __init init_sched_ghost_class(void)
@@ -1200,10 +1201,14 @@ static bool ghost_sched_is_valid_access(int off, int size,
 					const struct bpf_prog *prog,
 					struct bpf_insn_access_aux *info)
 {
-	/* struct bpf_ghost_sched is empty so all accesses are invalid. */
-	return false;
-}
+	int version = bpf_prog_eat_abi(prog);
+	const struct ghost_abi *abi = ghost_abi_lookup(version);
 
+	if (WARN_ON_ONCE(!abi))
+		return false;
+
+	return abi->ghost_sched_is_valid_access(off, size, type, prog, info);
+}
 
 const struct bpf_verifier_ops ghost_sched_verifier_ops = {
 	.get_func_proto		= ghost_sched_func_proto,

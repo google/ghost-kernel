@@ -90,6 +90,11 @@ static const struct file_operations queue_fops;
 static void ghost_destroy_enclave(struct ghost_enclave *e);
 static void enclave_release(struct kref *k);
 
+static inline gtid_t gtid(struct task_struct *p)
+{
+	return p->gtid;
+}
+
 /* True if X and Y have the same enclave, including having no enclave. */
 static bool check_same_enclave(int cpu_x, int cpu_y)
 {
@@ -135,15 +140,13 @@ static inline bool enclave_is_reapable(struct ghost_enclave *e)
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
-#define BPF_GHOST_PNT_DONT_IDLE		1
-
 static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
-			  struct rq_flags *rf)
+			  struct task_struct *prev, struct rq_flags *rf)
 {
-	struct bpf_ghost_sched_kern ctx = {};
+	struct task_struct *agent = rq->ghost.agent;
+	struct bpf_ghost_sched_kern ctx[1];
 	struct bpf_prog *prog;
 	struct ghost_enclave *old_target;
-	int ret;
 
 	lockdep_assert_held(&rq->lock);
 
@@ -152,6 +155,25 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	if (!prog) {
 		rcu_read_unlock();
 		return;
+	}
+	/* Zero the struct to avoid leaking stack data in struct padding */
+	memset(ctx, 0, sizeof(struct bpf_ghost_sched_kern));
+
+	ctx->agent_on_rq = agent && agent->on_rq;
+	ctx->agent_runnable = ctx->agent_on_rq && !rq->ghost.blocked_in_run;
+
+	ctx->might_yield = rq_adj_nr_running(rq) > 0;
+	ctx->dont_idle = false;
+
+	if (rq->ghost.latched_task) {
+		ctx->next_gtid = gtid(rq->ghost.latched_task);
+	} else if (task_has_ghost_policy(prev)
+		   && prev->state == TASK_RUNNING
+		   && prev != agent
+		   && !rq->ghost.must_resched) {
+		ctx->next_gtid = gtid(prev);
+	} else {
+		ctx->next_gtid = 0;
 	}
 
 	/*
@@ -163,7 +185,9 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	raw_spin_unlock(&rq->lock);
 
 	old_target = set_target_enclave(e);
-	ret = BPF_PROG_RUN(prog, &ctx);
+	rq->ghost.in_pnt_bpf = true;
+	BPF_PROG_RUN(prog, ctx);
+	rq->ghost.in_pnt_bpf = false;
 	restore_target_enclave(old_target);
 
 	raw_spin_lock(&rq->lock);
@@ -171,7 +195,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 
 	rcu_read_unlock();
 
-	if (ret == BPF_GHOST_PNT_DONT_IDLE) {
+	if (ctx->dont_idle) {
 		/*
 		 * The next time this rq selects the idle task, it will bail out
 		 * of do_idle() quickly.  Since we unlocked the RQ lock, it's
@@ -353,11 +377,6 @@ static void submit_enclave_work(struct ghost_enclave *e, struct rq *rq,
 	list_add(&ew->link, &rq->ghost.enclave_work);
 	/* OK to resubmit ew_head, so long as the func stays the same */
 	queue_balance_callback(rq, &rq->ghost.ew_head, __do_enclave_work);
-}
-
-static inline gtid_t gtid(struct task_struct *p)
-{
-	return p->gtid;
 }
 
 static inline bool on_ghost_rq(struct rq *rq, struct task_struct *p)
@@ -900,14 +919,6 @@ static int _balance_ghost(struct rq *rq, struct task_struct *prev,
 
 		raw_spin_lock(&rq->lock);
 		rq_repin_lock(rq, rf);
-	}
-
-	if (!rq->ghost.latched_task && rq->ghost.pnt_bpf_once) {
-		rq->ghost.pnt_bpf_once = false;
-		/* If there is a BPF program, this will unlock the RQ */
-		rq->ghost.in_pnt_bpf = true;
-		ghost_bpf_pnt(agent->ghost.enclave, rq, rf);
-		rq->ghost.in_pnt_bpf = false;
 	}
 
 	/*
@@ -7238,8 +7249,11 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 /*
  * Called at the start of every pick_next_task() via __schedule().
  */
-static void pnt_prologue(struct rq *rq, struct task_struct *prev)
+static void pnt_prologue(struct rq *rq, struct task_struct *prev,
+			 struct rq_flags *rf)
 {
+	struct ghost_enclave *e;
+
 	rq->ghost.check_prev_preemption = ghost_produce_prev_msgs(rq, prev);
 	if (unlikely(rq->ghost.ignore_prev_preemption)) {
 		rq->ghost.check_prev_preemption = false;
@@ -7249,7 +7263,6 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 	/* a negative 'switchto_count' indicates end of the chain */
 	rq->ghost.switchto_count = -rq->ghost.switchto_count;
 	WARN_ON_ONCE(rq->ghost.switchto_count > 0);
-	rq->ghost.pnt_bpf_once = true;
 
 	/*
 	 * Lockless way to set must_resched, which kicks prev off cpu.  The
@@ -7258,6 +7271,13 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev)
 	 */
 	if (READ_ONCE(rq->ghost.prev_resched_seq) == rq->ghost.cpu_seqnum)
 		rq->ghost.must_resched = true;
+
+	rcu_read_lock();
+	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
+	/* If there is a BPF program, this will unlock the RQ */
+	if (e)
+		ghost_bpf_pnt(e, rq, prev, rf);
+	rcu_read_unlock();
 }
 
 /*
@@ -7425,6 +7445,19 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 	}
 
 	return 0;
+}
+
+static bool ghost_sched_is_valid_access(int off, int size,
+					enum bpf_access_type type,
+					const struct bpf_prog *prog,
+					struct bpf_insn_access_aux *info)
+{
+	/* The verifier guarantees that size > 0. */
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_sched)
+	    || off % size)
+		return false;
+
+	return true;
 }
 
 static bool ghost_msg_is_valid_access(int off, int size,
@@ -7691,6 +7724,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
 	.bpf_resched_cpu = bpf_resched_cpu,
+	.ghost_sched_is_valid_access = ghost_sched_is_valid_access,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.bpf_link_attach = _ghost_bpf_link_attach,
 

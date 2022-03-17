@@ -112,7 +112,6 @@ struct ghost_rq {
 	bool ignore_prev_preemption;
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
 	bool skip_latched_preemption;
-	bool pnt_bpf_once;		/* BPF runs at most once in PNT */
 	bool in_pnt_bpf;		/* running BPF at PNT */
 	bool dont_idle_once;		/* Don't idle next time rq->idle runs */
 	int ghost_nr_running;
@@ -2187,7 +2186,8 @@ struct ghost_abi {
 	int (*fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*cleanup_fork)(struct ghost_enclave *e, struct task_struct *p);
 	void (*wait_for_rendezvous)(struct rq *rq);
-	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev);
+	void (*pnt_prologue)(struct rq *rq, struct task_struct *prev,
+			     struct rq_flags *rf);
 	void (*prepare_task_switch)(struct rq *rq, struct task_struct *prev,
 				    struct task_struct *next);
 	void (*tick)(struct ghost_enclave *e, struct rq *rq);
@@ -2200,6 +2200,10 @@ struct ghost_abi {
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
 	int (*bpf_resched_cpu)(int cpu, u64 cpu_seqnum);
+	bool (*ghost_sched_is_valid_access)(int off, int size,
+					    enum bpf_access_type type,
+					    const struct bpf_prog *prog,
+					    struct bpf_insn_access_aux *info);
 	bool (*ghost_msg_is_valid_access)(int off, int size,
 					  enum bpf_access_type type,
 					  const struct bpf_prog *prog,
@@ -2275,7 +2279,8 @@ void ghost_remove_cpu(struct ghost_enclave *e, int cpu);
 
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
-void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev);
+void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev,
+			struct rq_flags *rf);
 void ghost_tick(struct rq *rq);
 
 int ghost_setscheduler(struct task_struct *p, struct rq *rq,
