@@ -66,7 +66,6 @@ static bool cpu_deliver_msg_tick(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
 static int agent_target_cpu(struct rq *rq);
 static inline bool ghost_txn_ready(int cpu);
-static bool _ghost_commit_pending_txn(int cpu, int where);
 static inline void ghost_claim_and_kill_txn(int cpu, enum ghost_txn_state err);
 static void ghost_commit_all_greedy_txns(void);
 static void ghost_commit_pending_txn(int where);
@@ -5545,11 +5544,10 @@ static inline void ghost_send_reschedule(struct cpumask *mask)
 }
 #endif
 
-static bool _ghost_commit_pending_txn(int cpu, int where)
+static void _ghost_commit_pending_txn(int cpu, int where)
 {
 	if (unlikely(ghost_claim_txn(cpu, where)))
-		return ghost_commit_txn(cpu, false, NULL);
-	return false;
+		ghost_commit_txn(cpu, false, NULL);
 }
 
 static void ghost_commit_pending_txn(int where)
