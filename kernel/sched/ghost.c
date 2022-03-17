@@ -1052,7 +1052,10 @@ static inline struct task_struct *pick_agent(struct rq *rq)
 	struct task_struct *agent = rq->ghost.agent;
 	struct task_struct *next = NULL;
 
-	BUG_ON(!agent || !agent->on_rq || !on_ghost_rq(rq, agent));
+	BUG_ON(!agent);
+	if (!agent->on_rq)
+		return NULL;
+	BUG_ON(!on_ghost_rq(rq, agent));
 
 	/*
 	 * 'agent' is on_rq so 'ghost_nr_running' must be at least 1.
@@ -1213,13 +1216,22 @@ static inline void ghost_update_boost_prio(struct task_struct *p,
 static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 {
 	struct task_struct *agent = rq->ghost.agent;
-	struct task_struct *next = NULL;
+	struct task_struct *next;
 	int nr_running;
 	bool preempted;
 	struct task_struct *prev = rq->curr;
 
-	if (!agent || !agent->on_rq)
-		goto done;
+	if (!agent)
+		return NULL;
+
+	/*
+	 * If the agent is not on_rq, we cannot wake the agent by poking the
+	 * blocked_in_run mechanisms (schedule_agent, wake_agent, etc.).  So
+	 * just bail out now.  The preemption case below is an optimization in
+	 * case we end up poking the agent, which we can't do.
+	 */
+	if (!agent->on_rq)
+		return NULL;
 
 	/*
 	 * Evaluate after produce_prev_msgs() in case it wakes up the local
@@ -1286,12 +1298,11 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 	 }
 
 	if (!next)
-		goto done;
+		return NULL;
 
 	ghost_update_boost_prio(next, preempted);
 	ghost_prepare_switch(rq, prev, next);
 
-done:
 	return next;
 }
 
@@ -1357,12 +1368,12 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 	}
 
 	/*
-	 * 'prev' may have entered ghost on a CPU which doesn't have an agent
-	 * or the agent is not runnable. In either case, we need to get 'prev'
-	 * off this CPU and let an agent (remote or local) decide where and
-	 * when to bring it back.
+	 * We still require the existence of an agent as a proxy for this cpu
+	 * being in an enclave.  Note that if we had no agent, we continued with
+	 * PNT, and prev was TASK_RUNNING, we could end up scheduling prev on
+	 * this cpu.
 	 */
-	if (!agent || !agent->on_rq)
+	if (!agent)
 		return NULL;
 
 	if (rq->ghost.latched_task) {
@@ -1396,8 +1407,8 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 			 * agent figure out what to do.
 			 */
 			pr_warn("ghost: likely leaking task %d", next->pid);
-			next = agent;
 			rq->ghost.blocked_in_run = false;
+			next = agent->on_rq ? agent : NULL;
 		} else {
 			if (unlikely(rq->ghost.run_flags & NEED_L1D_FLUSH))
 				kvm_register_core_conflict(cpu_of(rq));
@@ -1430,6 +1441,10 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 
 done:
 	if (unlikely(!next && rq->ghost.run_flags & RTLA_ON_IDLE)) {
+		/*
+		 * Equivalent to schedule_agent(): run the agent if it can be
+		 * run (i.e. on_rq).  May return NULL if the agent isn't on_rq.
+		 */
 		rq->ghost.blocked_in_run = false;
 		return pick_next_ghost_agent(rq);
 	}
