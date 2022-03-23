@@ -3740,12 +3740,6 @@ static inline int __produce_for_task(struct task_struct *p,
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
 	};
-	/*
-	 * XXX for a task that enters ghost into enclave_X but on a cpu
-	 * that belongs to enclave_Y then we'll call the 'bpf_msg_send'
-	 * program attached to enclave_X but any BPF helpers used by the
-	 * program will callback into enclave_Y.
-	 */
 	if (!ghost_bpf_msg_send(p->ghost.enclave, msg))
 		return -ENOMSG;
 	return _produce(p->ghost.dst_q, barrier, msg->type,
