@@ -3547,11 +3547,10 @@ static int ghost_config_queue_wakeup(
 		}
 
 		for (i = 0; i < ninfo; i++) {
-			/* cpu == -1 implies that it is polling for messages. */
 			cpu = wakeup[i].cpu;
 
-			if (wakeup[i].prio || (cpu < -1) ||
-			    (cpu >= nr_cpu_ids) || !cpu_online(cpu)) {
+			if (wakeup[i].prio || cpu < 0 || cpu >= nr_cpu_ids ||
+					   !cpu_online(cpu)) {
 				ret = -EINVAL;
 				goto out_fput;
 			}
