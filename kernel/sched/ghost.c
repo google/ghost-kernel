@@ -58,7 +58,7 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 				      bool runnable);
 static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p);
-static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
+static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
 				     bool latched_preempt);
@@ -4019,26 +4019,26 @@ static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 	produce_for_task(p, msg);
 }
 
-static void task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
+static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
 	struct ghost_msg_payload_task_dead *payload = &msg->dead;
 
 	if (__task_deliver_common(rq, p))
-		return;
+		return false;
 
 	msg->type = MSG_TASK_DEAD;
 	payload->gtid = gtid(p);
-	produce_for_task(p, msg);
+	return produce_for_task(p, msg) == 0;
 }
 
-static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
+static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
 	struct ghost_msg_payload_task_departed *payload = &msg->departed;
 
 	if (__task_deliver_common(rq, p))
-		return;
+		return false;
 
 	msg->type = MSG_TASK_DEPARTED;
 	payload->gtid = gtid(p);
@@ -4050,7 +4050,7 @@ static void task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 		payload->from_switchto = false;
 	payload->was_current = task_current(rq, p);
 
-	produce_for_task(p, msg);
+	return produce_for_task(p, msg) == 0;
 }
 
 static void task_deliver_msg_affinity_changed(struct rq *rq,
@@ -4183,37 +4183,42 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 
 		ghost_sw_set_flag(p->ghost.status_word,
 				  GHOST_SW_F_CANFREE|GHOST_SW_TASK_MSG_GATED);
-		task_deliver_msg_departed(rq, p);
+		if (!task_deliver_msg_departed(rq, p)) {
+			free_status_word_locked(e, p->ghost.status_word);
+		} else {
+			/*
+			 * Inhibit all msgs produced by this task until the
+			 * agent acknowledges receipt of TASK_DEPARTED msg
+			 * (implicitly by freeing the status_word). This ensures
+			 * that when TASK_NEW is produced any msgs associated
+			 * with an earlier incarnation have been consumed.
+			 */
+			p->inhibit_task_msgs = enclave_abi(e);
 
-		/*
-		 * Inhibit all msgs produced by this task until the agent
-		 * acknowledges receipt of TASK_DEPARTED msg (implicitly by
-		 * freeing the status_word). This ensures that when TASK_NEW
-		 * is produced any msgs associated with an earlier incarnation
-		 * have been consumed.
-		 */
-		p->inhibit_task_msgs = enclave_abi(e);
-
-		/*
-		 * Track the task in the enclave's 'inhibited_task_list'.
-		 *
-		 * We must do this because a departed task can re-enter ghost
-		 * while it is exiting and subsequently lose its identity
-		 * (e.g. see go/kcl/390722). It is possible for the task to
-		 * enter a different enclave in which case the fallback in
-		 * kcl/390722 is ineffective.
-		 *
-		 * TODO: declare enclave failure if agent does not free the
-		 * status_word of a departed task within X msec (X should be
-		 * smaller than the e->max_unscheduled timeout):
-		 * - misbehavior of one enclave should not result in a
-		 *   (false-positive) failure of a different enclave.
-		 * - limit the task_struct memory held hostage while they are
-		 *   on the inhibited_task_list.
-		 */
-		get_task_struct(p);
-		WARN_ON_ONCE(!list_empty(&p->inhibited_task_list));
-		list_add_tail(&p->inhibited_task_list, &e->inhibited_task_list);
+			/*
+			 * Track the task in the enclave's
+			 * 'inhibited_task_list'.
+			 *
+			 * We must do this because a departed task can re-enter
+			 * ghost while it is exiting and subsequently lose its
+			 * identity (e.g. see go/kcl/390722). It is possible for
+			 * the task to enter a different enclave in which case
+			 * the fallback in kcl/390722 is ineffective.
+			 *
+			 * TODO: declare enclave failure if agent does not free
+			 * the status_word of a departed task within X msec (X
+			 * should be smaller than the e->max_unscheduled
+			 * timeout):
+			 * - misbehavior of one enclave should not result in a
+			 *   (false-positive) failure of a different enclave.
+			 * - limit the task_struct memory held hostage while
+			 *   they are on the inhibited_task_list.
+			 */
+			get_task_struct(p);
+			WARN_ON_ONCE(!list_empty(&p->inhibited_task_list));
+			list_add_tail(&p->inhibited_task_list,
+				      &e->inhibited_task_list);
+		}
 	} else {
 		/*
 		 * Annotate the status_word so it can be freed by the agent.
@@ -4226,9 +4231,17 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		 * before delivery of the TASK_DEAD message below.
 		 */
 		ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_F_CANFREE);
-		task_deliver_msg_dead(rq, p);
+		/*
+		 * Automatically free the status_word if we didn't deliver a
+		 * TASK_MSG_DEAD but only for non-agent ghost tasks.
+		 *
+		 * Otherwise, userspace will spin-wait for GHOST_SW_F_CANFREE as
+		 * a sign that the agent fully exited, and then it destroys the
+		 * SW.
+		 */
+		if (!task_deliver_msg_dead(rq, p) && !is_agent(rq, p))
+			free_status_word_locked(e, p->ghost.status_word);
 	}
-	WARN_ON_ONCE(!p->inhibit_task_msgs && p->state != TASK_DEAD);
 
 	/* status_word is off-limits to the kernel */
 	p->ghost.status_word = NULL;
