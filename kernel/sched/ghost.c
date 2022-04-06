@@ -2170,6 +2170,48 @@ static void __enclave_remove_task(struct ghost_enclave *e,
 	e->nr_tasks--;
 }
 
+/*
+ * Run f() on every task in the enclave.  There's no guarantee p is still in the
+ * enclave, so f() may have to check for it.
+ */
+static int enclave_for_each_task(struct ghost_enclave *e,
+				 void (*f)(struct ghost_enclave *e,
+					   struct task_struct *p, void *arg),
+				 void *arg)
+{
+	unsigned long irq_fl;
+	struct task_struct **for_each;
+	size_t nr_tasks = 0;
+	struct task_struct *p;
+	int i;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+
+	/* Don't hold e->lock during f(), since f() may grab the rq lock. */
+	for_each = kcalloc(e->nr_tasks, sizeof(struct task_struct *),
+			   GFP_ATOMIC);
+	if (WARN_ON_ONCE(!for_each)) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -ENOMEM;
+	}
+	list_for_each_entry(p, &e->task_list, ghost.task_list) {
+		if (WARN_ON_ONCE(nr_tasks >= e->nr_tasks))
+			break;
+		get_task_struct(p);
+		for_each[nr_tasks++] = p;
+	}
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+
+	for (i = 0; i < nr_tasks; i++) {
+		p = for_each[i];
+		f(e, p, arg);
+		put_task_struct(p);
+	}
+	kfree(for_each);
+
+	return 0;
+}
+
 static void enclave_add_sw_region(struct ghost_enclave *e,
 				  struct ghost_sw_region *region)
 {
@@ -6653,6 +6695,23 @@ err_snprintf:
 	return err;
 }
 
+static void generate_task_new(struct ghost_enclave *e, struct task_struct *p,
+			      void *arg)
+{
+	struct rq_flags rf;
+	struct rq *rq;
+
+	rq = task_rq_lock(p, &rf);
+	/*
+	 * Make sure p is in the enclave.  It could have departed after we
+	 * unlocked the enclave.  P could also have rejoined too, and it's OK
+	 * to send another task_new.
+	 */
+	if (p->ghost.enclave == e)
+		task_deliver_msg_task_new(rq, p, task_on_rq_queued(p));
+	task_rq_unlock(rq, p, &rf);
+}
+
 static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 			    size_t len, loff_t off)
 {
@@ -6680,6 +6739,11 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 			return err;
 	} else if (!strcmp(buf, "disable my bpf_prog_load")) {
 		current->group_leader->ghost.bpf_cannot_load_prog = 1;
+	} else if (!strcmp(buf, "discover tasks")) {
+		err = enclave_for_each_task(of_to_e(of), generate_task_new,
+					    NULL);
+		if (err)
+			return err;
 	} else {
 		pr_err("%s: bad cmd :%s:", __func__, buf);
 		return -EINVAL;
