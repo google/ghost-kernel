@@ -971,7 +971,7 @@ static void yield_task_ghost(struct rq *rq)
 			  p->pid, p->comm, cpu_of(rq));
 }
 
-static int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
+int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	struct ghost_enclave *e;
 

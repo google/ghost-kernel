@@ -2304,6 +2304,8 @@ unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);
 void init_ghost_rq(struct ghost_rq *ghost_rq);
 
+int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags);
+
 #ifdef CONFIG_SWITCHTO_API
 void ghost_switchto(struct rq *rq, struct task_struct *prev,
 		    struct task_struct *next, int switchto_flags);

@@ -2904,6 +2904,49 @@ int select_task_rq(struct task_struct *p, int cpu, int wake_flags)
 {
 	lockdep_assert_held(&p->pi_lock);
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (task_has_ghost_policy(p)) {
+		/*
+		 * Agents must always stay on the rq of their pinned cpu.
+		 */
+		if (p->ghost.agent)
+			return task_cpu(p);
+		/*
+		 * ghost ignores p->cpus_allowed when it latches task, so we
+		 * only ever want to call select_task_rq_ghost().
+		 *
+		 * select_task_rq() doesn't affect where a task will run next -
+		 * the agent decides that.  Instead, it decides where a task
+		 * wakes up.  The rq is more of a temporary staging ground, and
+		 * the agent maintains the 'real' runqueue(s).
+		 *
+		 * You might be tempted to let the agent pick any cpu here, but
+		 * that is dangerous.  Since we use TTWU_QUEUE, we'll send a
+		 * resched IPI to that cpu, and the wakeup (ttwu_do_activate())
+		 * will happen in IRQ context.  It's possible to overload a cpu
+		 * with resched IPIs, so long as that cpu's *execution* is not
+		 * required for the wake-run-block-wake loop.  i.e. it is stuck
+		 * handling IPIs for wakeups, and other cpus latch and run the
+		 * task, generating an endless stream of wakeup IPIs.  This is
+		 * exacerbated by bpf-msg, but could happen with enough cpus
+		 * waking tasks or with some inefficient/unscalable
+		 * sched_class->task_woken().
+		 *
+		 * There are two 'safe' cpus to select: our current cpu, which
+		 * won't require an IPI, and task_cpu(p).  task_cpu will change
+		 * once a task runs, so if a victim cpu is overloaded and
+		 * another cpu runs the task, that cpu becomes task_cpu,
+		 * breaking the endless stream.
+		 */
+		cpu = select_task_rq_ghost(p, cpu, wake_flags);
+		if (WARN_ON_ONCE(cpu != task_cpu(p)
+				 && cpu != smp_processor_id()))
+			cpu = smp_processor_id();
+		if (!cpu_online(cpu))
+			cpu = smp_processor_id();
+		return cpu;
+	}
+#endif
 	if (p->nr_cpus_allowed > 1 && !is_migration_disabled(p))
 		cpu = p->sched_class->select_task_rq(p, cpu, wake_flags);
 	else
