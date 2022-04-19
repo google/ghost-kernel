@@ -6273,7 +6273,8 @@ static int gf_e_open(struct kernfs_open_file *of)
 	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
 	 * scenario.  agent's should open files from CFS.
 	 */
-	WARN_ON_ONCE(is_agent(task_rq(current), current));
+	if (!READ_ONCE(e->live_dangerously))
+		WARN_ON_ONCE(is_agent(task_rq(current), current));
 
 	kref_get(&e->kref);
 	return 0;
@@ -6861,6 +6862,37 @@ static struct kernfs_ops gf_ops_e_deliver_ticks = {
 	.write			= gf_deliver_ticks_write,
 };
 
+static int gf_live_dangerously_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->live_dangerously));
+	return 0;
+}
+
+static ssize_t gf_live_dangerously_write(struct kernfs_open_file *of,
+					 char *buf, size_t len, loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->live_dangerously, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_live_dangerously = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_live_dangerously_show,
+	.write			= gf_live_dangerously_write,
+};
+
 /*
  * Returns a kreffed pointer for the enclave for f, if f is a ghostfs ctl file.
  * NULL otherwise.
@@ -7143,6 +7175,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "deliver_ticks",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_deliver_ticks,
+	},
+	{
+		.name		= "live_dangerously",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_live_dangerously,
 	},
 	{
 		.name		= "runnable_timeout",

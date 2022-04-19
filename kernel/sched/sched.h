@@ -192,6 +192,7 @@ struct ghost_enclave {
 	bool wake_on_waker_cpu;
 	bool commit_at_tick;
 	bool deliver_ticks;
+	bool live_dangerously;
 
 	unsigned long id;
 	int is_dying;
