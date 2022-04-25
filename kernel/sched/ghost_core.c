@@ -1204,7 +1204,7 @@ static bool ghost_sched_is_valid_access(int off, int size,
 	int version = bpf_prog_eat_abi(prog);
 	const struct ghost_abi *abi = ghost_abi_lookup(version);
 
-	if (WARN_ON_ONCE(!abi))
+	if (!abi)
 		return false;
 
 	return abi->ghost_sched_is_valid_access(off, size, type, prog, info);
@@ -1239,7 +1239,7 @@ static bool ghost_msg_is_valid_access(int off, int size,
 	int version = bpf_prog_eat_abi(prog);
 	const struct ghost_abi *abi = ghost_abi_lookup(version);
 
-	if (WARN_ON_ONCE(!abi))
+	if (!abi)
 		return false;
 
 	return abi->ghost_msg_is_valid_access(off, size, type, prog, info);
