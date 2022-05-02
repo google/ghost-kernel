@@ -248,7 +248,7 @@ static int ghost_get_tree(struct fs_context *fc)
 	VM_BUG_ON(!ghost_kfs_root);
 	ret = kernfs_get_tree(fc);
 	if (ret)
-		WARN(1, "Failed to mount ghostfs!");
+		pr_err_once("Failed to mount ghostfs: %ld\n", ret);
 	return ret;
 }
 
