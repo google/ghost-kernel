@@ -5756,7 +5756,7 @@ static int ghost_sync_group(struct ghost_enclave *e,
 	 * true		subset of sync_group cpus with claimed txns.
 	 */
 	for_each_cpu(cpu, cpumask) {
-		if (WARN_ON_ONCE(!ghost_claim_txn(cpu, -1))) {
+		if (!ghost_claim_txn(cpu, -1)) {
 			/*
 			 * This is not expected and points at a programming
 			 * error in the agent (e.g. txn was async committed
