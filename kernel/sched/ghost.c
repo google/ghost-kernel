@@ -3104,7 +3104,7 @@ static struct task_struct *find_task_by_gtid(gtid_t gtid)
 		struct ghost_enclave *e;
 
 		e = rcu_dereference(per_cpu(enclave, smp_processor_id()));
-		if (WARN_ON_ONCE(!e))
+		if (!e)
 			return NULL;
 
 		spin_lock_irqsave(&e->lock, flags);
