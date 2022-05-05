@@ -3146,17 +3146,16 @@ static struct task_struct *find_task_by_gtid(gtid_t gtid)
 	return p;
 }
 
-static int _get_sw_info(struct ghost_enclave *e,
-			 const struct ghost_status_word *sw,
-			 struct ghost_sw_info *info)
+static int _get_sw_info_locked(struct ghost_enclave *e,
+			       const struct ghost_status_word *sw,
+			       struct ghost_sw_info *info)
 {
-	ulong flags;
 	int error = -ENOENT;
 	struct ghost_sw_region *region;
 	struct ghost_sw_region_header *header;
 	struct ghost_status_word *first, *limit;
 
-	spin_lock_irqsave(&e->lock, flags);
+	VM_BUG_ON(!spin_is_locked(&e->lock));
 	list_for_each_entry(region, &e->sw_region_list, list) {
 		header = region->header;
 		first = first_status_word(header);
@@ -3168,8 +3167,20 @@ static int _get_sw_info(struct ghost_enclave *e,
 			break;
 		}
 	}
-	spin_unlock_irqrestore(&e->lock, flags);
 	return error;
+}
+
+static int _get_sw_info(struct ghost_enclave *e,
+			 const struct ghost_status_word *sw,
+			 struct ghost_sw_info *info)
+{
+	ulong flags;
+	int ret;
+
+	spin_lock_irqsave(&e->lock, flags);
+	ret = _get_sw_info_locked(e, sw, info);
+	spin_unlock_irqrestore(&e->lock, flags);
+	return ret;
 }
 
 static int ghost_sw_get_info(struct ghost_enclave *e,
@@ -3184,27 +3195,42 @@ static int ghost_sw_get_info(struct ghost_enclave *e,
 		return -EFAULT;
 
 	if (src.type == GHOST_AGENT) {
-		int want_cpu = src.arg, curr_cpu = get_cpu();
-		struct rq *rq = this_rq();
-		struct rq_flags rf;
+		ulong flags;
+		int want_cpu = src.arg;
+		struct rq *rq;
+		struct task_struct *agent;
 
 		/*
-		 * For now we restrict an agent to only query its
-		 * own status_word.
+		 * A write must acquire both the enclave lock and the rq lock to
+		 * write rq->ghost.agent, so it is safe to read rq->ghost.agent
+		 * as long as we hold at least one of the two locks. We want to
+		 * check that 'want_cpu' is in the enclave, so we may as well
+		 * just acquire the enclave lock.
 		 */
-		if (want_cpu != GHOST_THIS_CPU && want_cpu != curr_cpu) {
-			put_cpu();
-			error = -ENOENT;
+		spin_lock_irqsave(&e->lock, flags);
+
+		/* Check that 'want_cpu' is in the enclave 'e'. */
+		if (!cpumask_test_cpu(want_cpu, &e->cpus)) {
+			error = -ENODEV;
+			spin_unlock_irqrestore(&e->lock, flags);
 			goto done;
 		}
 
-		rq_lock_irq(rq, &rf);
-		if (is_agent(rq, current)) {
-			error = _get_sw_info(e, current->ghost.status_word,
-					     &info);
+		rq = cpu_rq(want_cpu);
+		agent = rq->ghost.agent;
+		/*
+		 * The agent may not have finished starting up yet or may have
+		 * died already.
+		 */
+		if (unlikely(!agent)) {
+			error = -EINVAL;
+			spin_unlock_irqrestore(&e->lock, flags);
+			goto done;
 		}
-		rq_unlock_irq(rq, &rf);
-		put_cpu();
+
+		error = _get_sw_info_locked(e, agent->ghost.status_word,
+					    &info);
+		spin_unlock_irqrestore(&e->lock, flags);
 	} else if (src.type == GHOST_TASK) {
 		rcu_read_lock();
 		p = find_task_by_gtid(src.arg);
