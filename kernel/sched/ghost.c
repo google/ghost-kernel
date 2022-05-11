@@ -5222,7 +5222,9 @@ static inline bool _ghost_txn_ready(int cpu, int *commit_flags)
 	bool ready = false;
 
 	VM_BUG_ON(preemptible());
-	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
+
+	if (unlikely(cpu < 0 || cpu >= nr_cpu_ids))
+		return false;
 
 	rcu_read_lock();
 	txn = rcu_dereference(per_cpu(ghost_txn, cpu));
