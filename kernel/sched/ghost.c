@@ -5355,7 +5355,9 @@ static inline bool ghost_claim_txn(int cpu, int where)
 	int commit_flags;
 
 	VM_BUG_ON(preemptible());
-	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
+
+	if (unlikely(cpu < 0 || cpu >= nr_cpu_ids))
+		return false;
 
 	/*
 	 * Ensure that COMMIT_AT_XYZ flag is never a negative value so
