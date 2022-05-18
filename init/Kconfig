@@ -2358,7 +2358,7 @@ config ARCH_HAS_SYSCALL_WRAPPER
 
 config SCHED_CLASS_GHOST
 	bool "ghOSt scheduling class"
-	depends on X86_64
+	depends on (X86_64 || ARM64)
 	default n
 	help
 	  ghOSt is a scheduling class with policy decisions delegated
