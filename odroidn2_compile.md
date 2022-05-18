@@ -32,6 +32,8 @@ Or
     $ uname -a to check the kernel
 ```
 It should output the new kernel version which is `5.11.0+`: ` Linux ubuntu 5.11.0+ #2 SMP PREEMPT Mon Apr 18 00:50:21 UTC 2022 aarch64 aarch64 aarch64 GNU/Linux`
+
 9. Finally install the headers
 ` sudo make headers_install INSTALL_HDR_PATH=/usr`
+
 10. Have fun
