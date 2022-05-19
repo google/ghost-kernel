@@ -45,6 +45,21 @@ static void gf_strip_slash_n(char *buf, size_t count)
 		*n = '\0';
 }
 
+void ghost_do_exit(struct task_struct *tsk, bool group_dead)
+{
+	const struct ghost_abi *abi;
+
+	VM_BUG_ON(tsk != current);
+
+	if (!group_dead)
+		return;
+
+	for_each_abi(abi) {
+		if (abi->group_dead)
+			abi->group_dead(tsk->tgid);
+	}
+}
+
 /* Helper to set the uid/gid of a kn */
 int ghostfs_set_ugid(struct kernfs_node *kn, kuid_t uid, kgid_t gid)
 {

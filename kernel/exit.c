@@ -809,6 +809,10 @@ void __noreturn do_exit(long code)
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	ghost_do_exit(tsk, group_dead);
+#endif
+
 	exit_mm();
 
 	if (group_dead)

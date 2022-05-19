@@ -201,6 +201,14 @@ struct ghost_enclave {
 	kuid_t uid;
 	kgid_t gid;
 
+	/*
+	 * A non-zero value of 'ephemeral_tgid' indicates that the enclave
+	 * will be automatically destroyed when the thread group (aka process)
+	 * indicated by 'ephemeral_tgid' dies.
+	 */
+	pid_t ephemeral_tgid;
+	struct list_head ephemeral_list;
+
 #ifdef CONFIG_BPF
 	struct bpf_prog *bpf_pnt;
 	struct bpf_prog *bpf_msg_send;
@@ -2199,6 +2207,7 @@ struct ghost_abi {
 				  char *cmd_extra);
 	void (*enclave_release)(struct kref *k);
 	void (*enclave_add_cpu)(struct ghost_enclave *e, int cpu);
+	void (*group_dead)(pid_t tgid);
 	int (*setscheduler)(struct ghost_enclave *e, struct task_struct *p,
 			    struct rq *rq, const struct sched_attr *attr,
 			    int *reset_on_fork);
@@ -2291,6 +2300,7 @@ struct ghost_enclave *set_target_enclave(struct ghost_enclave *e);
 void restore_target_enclave(struct ghost_enclave *old);
 
 int ghostfs_set_ugid(struct kernfs_node *kn, kuid_t uid, kgid_t gid);
+void ghost_do_exit(struct task_struct *tsk, bool group_dead);
 
 void init_sched_ghost_class(void);
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *cpus);

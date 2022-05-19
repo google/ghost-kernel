@@ -91,6 +91,33 @@ static const struct file_operations queue_fops;
 static void ghost_destroy_enclave(struct ghost_enclave *e);
 static void enclave_release(struct kref *k);
 
+static DEFINE_SPINLOCK(ephemeral_enclaves_lock);
+static LIST_HEAD(ephemeral_enclaves_list);
+
+static void remember_ephemeral_enclave(struct ghost_enclave *e)
+{
+	unsigned long irq_flags;
+
+	WARN_ON_ONCE(!e->ephemeral_tgid);
+	WARN_ON_ONCE(!list_empty(&e->ephemeral_list));
+
+	spin_lock_irqsave(&ephemeral_enclaves_lock, irq_flags);
+	list_add_tail(&e->ephemeral_list, &ephemeral_enclaves_list);
+	spin_unlock_irqrestore(&ephemeral_enclaves_lock, irq_flags);
+}
+
+static void forget_ephemeral_enclave(struct ghost_enclave *e)
+{
+	unsigned long irq_flags;
+
+	WARN_ON_ONCE(!e->ephemeral_tgid);
+	WARN_ON_ONCE(list_empty(&e->ephemeral_list));
+
+	spin_lock_irqsave(&ephemeral_enclaves_lock, irq_flags);
+	list_del_init(&e->ephemeral_list);
+	spin_unlock_irqrestore(&ephemeral_enclaves_lock, irq_flags);
+}
+
 static inline gtid_t gtid(struct task_struct *p)
 {
 	return p->gtid;
@@ -2078,6 +2105,9 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 	 * is closed, we'll release and free.
 	 */
 	kernfs_remove(e->enclave_dir);
+
+	if (e->ephemeral_tgid)
+		forget_ephemeral_enclave(e);
 
 	kref_put(&e->kref, enclave_release);
 }
@@ -7044,6 +7074,7 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	struct ghost_enclave *e = seq_to_e(sf);
 	unsigned long fl;
 	bool is_active;
+	pid_t ephemeral_tgid;
 	unsigned long nr_tasks;
 
 	/*
@@ -7058,11 +7089,14 @@ static int gf_status_show(struct seq_file *sf, void *v)
 	 */
 	is_active = e->agent_online;
 	nr_tasks = e->nr_tasks;
+	ephemeral_tgid = e->ephemeral_tgid;
 	spin_unlock_irqrestore(&e->lock, fl);
 
 	seq_printf(sf, "version %u\n", e->abi->version);
 	seq_printf(sf, "active %s\n", is_active ? "yes" : "no");
 	seq_printf(sf, "nr_tasks %lu\n", nr_tasks);
+	if (ephemeral_tgid)
+		seq_printf(sf, "ephemeral %u\n", ephemeral_tgid);
 	return 0;
 }
 
@@ -7359,7 +7393,16 @@ static int handle_cmdline_args(char *param, char *val, const char *unused,
 		return 0;
 	}
 
-	return -ENOENT;
+	if (parameq(param, "ephemeral")) {
+		if (val)
+			return -EINVAL;
+
+		WARN_ON_ONCE(!current->tgid);
+		e->ephemeral_tgid = current->tgid;
+		return 0;
+	}
+
+	return -ENOENT;		/* unknown option */
 }
 
 static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
@@ -7387,6 +7430,7 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 	INIT_LIST_HEAD(&e->task_list);
 	INIT_LIST_HEAD(&e->inhibited_task_list);
 	INIT_LIST_HEAD(&e->ew.link);
+	INIT_LIST_HEAD(&e->ephemeral_list);
 	INIT_WORK(&e->task_reaper, enclave_reap_tasks);
 	INIT_WORK(&e->enclave_actual_release, enclave_actual_release);
 	INIT_WORK(&e->enclave_destroyer, enclave_destroyer);
@@ -7442,6 +7486,9 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 
 	e->id = id;
 	e->enclave_dir = dir;
+
+	if (e->ephemeral_tgid)
+		remember_ephemeral_enclave(e);
 
 	return e;
 }
@@ -7902,6 +7949,19 @@ static int _ghost_bpf_link_attach(const union bpf_attr *attr,
 	return bpf_link_settle(&link_primer);
 }
 
+static void _ghost_group_dead(pid_t tgid)
+{
+	unsigned long irq_flags;
+	struct ghost_enclave *e;
+
+	spin_lock_irqsave(&ephemeral_enclaves_lock, irq_flags);
+	list_for_each_entry(e, &ephemeral_enclaves_list, ephemeral_list) {
+		WARN_ON_ONCE(!e->ephemeral_tgid);
+		if (e->ephemeral_tgid == tgid)
+			ghost_destroy_enclave(e);
+	}
+	spin_unlock_irqrestore(&ephemeral_enclaves_lock, irq_flags);
+}
 
 DEFINE_GHOST_ABI(current_abi) = {
 	.version = GHOST_VERSION,
@@ -7909,6 +7969,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.create_enclave = create_enclave,
 	.enclave_release = enclave_release,
 	.enclave_add_cpu = ___enclave_add_cpu,
+	.group_dead = _ghost_group_dead,
 	.setscheduler = _ghost_setscheduler,
 	.fork = _ghost_sched_fork,
 	.cleanup_fork = _ghost_sched_cleanup_fork,
