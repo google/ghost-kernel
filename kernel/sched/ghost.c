@@ -7404,10 +7404,7 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 	}
 
 	if (vmalloc_failed) {
-		for_each_possible_cpu(cpu)
-			vfree(e->cpu_data[cpu]);
-		kfree(e->cpu_data);
-		kfree(e);
+		kref_put(&e->kref, enclave_release);
 		return ERR_PTR(-ENOMEM);
 	}
 
