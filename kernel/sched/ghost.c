@@ -18,6 +18,7 @@
 #include <linux/bitops.h>
 #include <linux/atomic.h>
 #include <linux/kvm_host.h>
+#include <linux/moduleparam.h>
 #include <uapi/linux/sched/types.h>
 #include <linux/file.h>
 #ifdef CONFIG_X86_64
@@ -7345,26 +7346,30 @@ static int __init abi_init(const struct ghost_abi *abi)
 	return 0;
 }
 
-static kgid_t parse_cmd_gid(const char *cmd_extra)
+static int handle_cmdline_args(char *param, char *val, const char *unused,
+			       void *arg)
 {
+	struct ghost_enclave *e = arg;
 	gid_t gid;
-	kgid_t kgid = GLOBAL_ROOT_GID;
-	int ret;
 
-	/* sscanf will snarf the leading whitespace, unlike kstrtoint. */
-	ret = sscanf(cmd_extra, "%u", &gid);
-	if (ret == 1)
-		kgid = KGIDT_INIT(gid);
-	return kgid;
+	if (parameq(param, "gid")) {
+		if (!val || kstrtoint(val, 0, &gid))
+			return -EINVAL;
+		e->gid = KGIDT_INIT(gid);
+		return 0;
+	}
+
+	return -ENOENT;
 }
 
 static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 					    struct kernfs_node *dir,
-					    ulong id, const char *cmd_extra)
+					    ulong id, char *cmd_extra)
 {
 	bool vmalloc_failed = false;
 	struct ghost_enclave *e;
 	int cpu, ret;
+	char *cp;
 
 	BUILD_BUG_ON(sizeof(struct ghost_cpu_data) != PAGE_SIZE);
 
@@ -7408,8 +7413,21 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 		return ERR_PTR(-ENOMEM);
 	}
 
+	/*
+	 * Initialize defaults for any configuration that can be updated
+	 * via parse_args().
+	 */
 	e->uid = current_euid();
-	e->gid = parse_cmd_gid(cmd_extra);
+	e->gid = GLOBAL_ROOT_GID;
+
+	/* Parse args */
+	cp = parse_args("create enclave", cmd_extra, NULL, 0, -1, -1, e,
+			handle_cmdline_args);
+	if (IS_ERR(cp)) {
+		kref_put(&e->kref, enclave_release);
+		return ERR_PTR(PTR_ERR(cp));
+	}
+
 	ret = ghostfs_set_ugid(dir, e->uid, e->gid);
 	if (ret) {
 		kref_put(&e->kref, enclave_release);

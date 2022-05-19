@@ -78,7 +78,7 @@ static const struct ghost_abi *ghost_abi_lookup(uint version)
 }
 
 static int make_enclave(struct kernfs_node *parent, unsigned long id,
-			unsigned int version, const char *cmd_extra)
+			unsigned int version, char *cmd_extra)
 {
 	struct kernfs_node *dir;
 	struct ghost_enclave *e;

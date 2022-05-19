@@ -2196,7 +2196,7 @@ struct ghost_abi {
 	struct ghost_enclave *
 		(*create_enclave)(const struct ghost_abi *abi,
 				  struct kernfs_node *dir, ulong id,
-				  const char *cmd_extra);
+				  char *cmd_extra);
 	void (*enclave_release)(struct kref *k);
 	void (*enclave_add_cpu)(struct ghost_enclave *e, int cpu);
 	int (*setscheduler)(struct ghost_enclave *e, struct task_struct *p,
