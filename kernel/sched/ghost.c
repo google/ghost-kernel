@@ -7094,13 +7094,16 @@ static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
 	if (ret)
 		return ret;
 
-	rcu_read_lock();
 	if (pid) {
+		rcu_read_lock();
 		t = find_task_by_vpid(pid);
 		if (!t) {
-			ret = -ESRCH;
-			goto out;
+			rcu_read_unlock();
+			return -ESRCH;
 		}
+		/* setsched can block on cpuset_read_lock() */
+		get_task_struct(t);
+		rcu_read_unlock();
 	} else {
 		t = current;
 	}
@@ -7111,8 +7114,8 @@ static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
 		ret = len;
 	restore_target_enclave(old_target);
 
-out:
-	rcu_read_unlock();
+	if (pid)
+		put_task_struct(t);
 
 	return ret;
 }
