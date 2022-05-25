@@ -3200,6 +3200,12 @@ static int ghost_sw_get_info(struct ghost_enclave *e,
 		struct rq *rq;
 		struct task_struct *agent;
 
+		if (want_cpu < 0 || want_cpu >= nr_cpu_ids ||
+		    !cpu_online(want_cpu)) {
+			error = -EINVAL;
+			goto done;
+		}
+
 		/*
 		 * A write must acquire both the enclave lock and the rq lock to
 		 * write rq->ghost.agent, so it is safe to read rq->ghost.agent
