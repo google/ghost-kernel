@@ -773,32 +773,24 @@ static void _set_next_task_ghost(struct rq *rq, struct task_struct *p,
 
 	if (is_agent(rq, p))
 		return;
-
-	/*
-	 * This can happen when a running task switches into ghost on a cpu
-	 * without an agent (not common).
-	 */
-	if (unlikely(!rq->ghost.agent)) {
-		force_offcpu(rq, true);
-		return;
-	}
-
 	/*
 	 * set_curr_task() is called when scheduling properties of a running
 	 * task change (e.g. affinity, priority, sched_class etc). Get this
 	 * task offcpu so the agent can incorporate these changes into its
-	 * scheduling policy. Note that schedule_agent() below achieves two
-	 * things:
-	 * 1. get 'rq->curr' offcpu.
-	 * 2. produce TASK_PREEMPTED so the agent knows 'rq->curr' got offcpu.
+	 * scheduling policy.
 	 *
-	 * The assumption behind return-to-local-agent is that changes to these
-	 * properties are advertised via messages (e.g. TASK_AFFINITY etc).
+	 * 1. force_offcpu() will get 'rq->curr' offcpu.
+	 * 2. ghost_produce_prev_msgs() (in pnt_prologue) will ensure we produce
+	 * TASK_PREEMPTED so the agent knows 'rq->curr' got offcpu.
+	 *
+	 * The assumption behind forcing the task offcpu is that changes to
+	 * these properties are advertised via messages (e.g. TASK_AFFINITY
+	 * etc).
 	 *
 	 * (another approach might be to produce a TASK_CHANGED msg here and
 	 *  let the agent figure out exactly what changed).
 	 */
-	schedule_agent(rq, true);
+	force_offcpu(rq, true);
 }
 
 /*
@@ -1097,7 +1089,6 @@ static inline struct task_struct *pick_agent(struct rq *rq)
 static inline void ghost_prepare_switch(struct rq *rq, struct task_struct *prev,
 					struct task_struct *next)
 {
-
 	if (next) {
 		next->ghost.last_runnable_at = 0;
 
