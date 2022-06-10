@@ -1485,11 +1485,25 @@ static void _yield_task_ghost(struct rq *rq)
 	 * Task is yielding so get it offcpu. We don't need the full
 	 * resched_curr() functionality here because sched_yield()
 	 * calls schedule() immediately after.
+	 *
+	 * Note that schedule_agent() will only run the agent if it is on_rq.
+	 * force_offcpu() essentially just sets must_resched = true, and it is
+	 * safe to do that even if the agent runs.  (must_resched is reset to
+	 * false every time we latch.)
+	 *
+	 * Side note: it's possible to have no agent here!  Consider our thread
+	 * is in CFS on a cpu not in the enclave and is yielding, while another
+	 * cpu is setscheduling us into ghost.  We are in do_sched_yield(),
+	 * spinning to grab our RQ lock with IRQs disabled.  The other cpu is
+	 * holding our RQ lock and setscheds us, ultimately calling
+	 * set_curr_task(), which will force_offcpu() with a resched IPI.
+	 * However, we have IRQs disabled, so we will yield, and call this
+	 * yield_task, before the IPI hits.  And *this cpu* does not have an
+	 * agent.
 	 */
+	force_offcpu(rq, false);
 	if (rq->ghost.run_flags & RTLA_ON_YIELD)
 		schedule_agent(rq, false);
-	else
-		force_offcpu(rq, false);
 
 	/*
 	 * Hold off on announcing that the task has yielded just yet.
