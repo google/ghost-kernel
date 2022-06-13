@@ -2092,7 +2092,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	bool is_gpl;
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	if (current->group_leader->ghost.bpf_cannot_load_prog)
+	if (READ_ONCE(current->group_leader->ghost.bpf_cannot_load_prog))
 		return -EPERM;
 #endif
 

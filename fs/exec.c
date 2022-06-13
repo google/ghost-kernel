@@ -1127,6 +1127,11 @@ static int de_thread(struct task_struct *tsk)
 		transfer_pid(leader, tsk, PIDTYPE_PGID);
 		transfer_pid(leader, tsk, PIDTYPE_SID);
 
+#ifdef CONFIG_SCHED_CLASS_GHOST
+		tsk->ghost.bpf_cannot_load_prog =
+			leader->ghost.bpf_cannot_load_prog;
+#endif
+
 		list_replace_rcu(&leader->tasks, &tsk->tasks);
 		list_replace_init(&leader->sibling, &tsk->sibling);
 

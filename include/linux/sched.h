@@ -611,7 +611,8 @@ struct sched_ghost_entity {
 	uint yield_task			: 1;
 	uint new_task			: 1;
 	uint agent			: 1;
-	uint bpf_cannot_load_prog	: 1;
+
+	bool bpf_cannot_load_prog;
 
 	/*
 	 * Locking of 'twi' is awkward:

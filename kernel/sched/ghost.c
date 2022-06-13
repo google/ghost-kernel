@@ -6808,7 +6808,8 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 		if (err)
 			return err;
 	} else if (!strcmp(buf, "disable my bpf_prog_load")) {
-		current->group_leader->ghost.bpf_cannot_load_prog = 1;
+		WRITE_ONCE(current->group_leader->ghost.bpf_cannot_load_prog,
+			   1);
 	} else if (!strcmp(buf, "discover tasks")) {
 		err = enclave_for_each_task(of_to_e(of), generate_task_new,
 					    NULL);
