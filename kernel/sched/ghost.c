@@ -482,6 +482,8 @@ static inline void invalidate_cached_tasks(struct rq *rq, struct task_struct *p)
 			 * trigger a 'task->preempted' CHECK-fail in the agent.
 			 */
 			rq->ghost.latched_task = NULL;
+			/* It's always safe to turn off ELIDE_PREEMPT. */
+			rq->ghost.run_flags &= ~ELIDE_PREEMPT;
 		} else {
 			/*
 			 * This is called via non-ghost move_queued_task()
@@ -1200,6 +1202,12 @@ static void ghost_latched_task_preempted(struct rq *rq)
 		WARN_ON_ONCE(latched != rq->idle);
 	}
 	rq->ghost.latched_task = NULL;
+	/*
+	 * We are no longer latching, so we should no longer elide any
+	 * preemptions caused by the latching.  It's always safe to turn off
+	 * ELIDE_PREEMPT.
+	 */
+	rq->ghost.run_flags &= ~ELIDE_PREEMPT;
 }
 
 static inline void ghost_update_boost_prio(struct task_struct *p,
@@ -1316,8 +1324,18 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 		 * This is the only time we clear check_prev_preemption without
 		 * sending a TASK_PREEMPT.
 		 */
-		if (rq->ghost.run_flags & ELIDE_PREEMPT)
+		if (rq->ghost.run_flags & ELIDE_PREEMPT) {
 			rq->ghost.check_prev_preemption = false;
+			/*
+			 * ELIDE_PREEMPT was set when we latched the presently
+			 * set rq->ghost.latched_task, which we will pick below.
+			 * Eliding the preemption applies to prev's preemption,
+			 * not to any future tasks (particularly the
+			 * latched_task we're about to run).
+			 */
+			rq->ghost.run_flags &= ~ELIDE_PREEMPT;
+			WARN_ON_ONCE(!rq->ghost.latched_task);
+		}
 	} else {
 		WARN_ON_ONCE(rq->ghost.switchto_count > 0);
 
