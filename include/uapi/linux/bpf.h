@@ -243,10 +243,22 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
+	__MAX_BPF_ATTACH_TYPE,
+};
+
+enum {
+	/*
+	 * There are arrays in the kernel that use MAX_BPF_ATTACH_TYPE, notably
+	 * in kernel/bpf/cgroup.c.  That code will essentially ignore ghost
+	 * programs.  Note that bpftool won't know about our types either.
+	 *
+	 * If we ever merge upstream, we can go back below
+	 * __MAX_BPF_ATTACH_TYPE.  We have our own numbers to avoid rebase hell.
+	 */
 	BPF_GHOST_SCHED_SKIP_TICK = 2000,
 	BPF_GHOST_SCHED_PNT,
 	BPF_GHOST_MSG_SEND,
-	__MAX_BPF_ATTACH_TYPE
+	__MAX_BPF_GHOST_ATTACH_TYPE
 };
 
 #define MAX_BPF_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
