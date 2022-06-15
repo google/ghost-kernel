@@ -2318,7 +2318,8 @@ void ghost_do_exit(struct task_struct *tsk, bool group_dead);
 
 void init_sched_ghost_class(void);
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *cpus);
-void ghost_remove_cpu(struct ghost_enclave *e, int cpu);
+void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu);
+void ghost_free_cpu(int cpu);
 
 int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);

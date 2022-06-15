@@ -346,8 +346,12 @@ static void __exit ghostfs_exit(void)
 late_initcall(ghostfs_init);
 __exitcall(ghostfs_exit);
 
-/* per_cpu(enclave) write protected by 'cpu_rsvp' */
+/*
+ * 'cpu_rsvp' protects per_cpu(in_use).
+ * per_cpu(in_use) write-protects per_cpu(enclave)
+ */
 static DEFINE_SPINLOCK(cpu_rsvp);
+DEFINE_PER_CPU_READ_MOSTLY(bool, in_use);
 DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
 struct ghost_enclave *get_target_enclave(void)
@@ -372,18 +376,15 @@ void restore_target_enclave(struct ghost_enclave *old)
 int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
 {
 	int cpu;
+	unsigned long irq_fl;
 
 	VM_BUG_ON(!spin_is_locked(&e->lock));
 
-	spin_lock(&cpu_rsvp);
+	spin_lock_irqsave(&cpu_rsvp, irq_fl);
 
 	for_each_cpu(cpu, new_cpus) {
-		/*
-		 * Let's make sure that 'cpu' hasn't been already claimed by
-		 * another enclave.
-		 */
-		if (per_cpu(enclave, cpu)) {
-			spin_unlock(&cpu_rsvp);
+		if (per_cpu(in_use, cpu)) {
+			spin_unlock_irqrestore(&cpu_rsvp, irq_fl);
 			return -EBUSY;
 		}
 	}
@@ -391,21 +392,31 @@ int ghost_add_cpus(struct ghost_enclave *e, const struct cpumask *new_cpus)
 	for_each_cpu(cpu, new_cpus)
 		e->abi->enclave_add_cpu(e, cpu);
 
-	for_each_cpu(cpu, new_cpus)
+	for_each_cpu(cpu, new_cpus) {
 		rcu_assign_pointer(per_cpu(enclave, cpu), e);
+		per_cpu(in_use, cpu) = true;
+	}
 
-	spin_unlock(&cpu_rsvp);
+	spin_unlock_irqrestore(&cpu_rsvp, irq_fl);
 	return 0;
 }
 
-void ghost_remove_cpu(struct ghost_enclave *e, int cpu)
+/* Caller must synchronize_rcu() before calling ghost_free_cpu() */
+void ghost_unpublish_cpu(struct ghost_enclave *e, int cpu)
 {
 	VM_BUG_ON(!spin_is_locked(&e->lock));
-
-	spin_lock(&cpu_rsvp);
 	WARN_ON_ONCE(per_cpu(enclave, cpu) != e);
+
 	rcu_assign_pointer(per_cpu(enclave, cpu), NULL);
-	spin_unlock(&cpu_rsvp);
+}
+
+void ghost_free_cpu(int cpu)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&cpu_rsvp, irq_fl);
+	per_cpu(in_use, cpu) = false;
+	spin_unlock_irqrestore(&cpu_rsvp, irq_fl);
 }
 
 /*

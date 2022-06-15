@@ -598,7 +598,7 @@ struct sched_ghost_entity {
 	struct ghost_status_word *status_word;
 	struct ghost_enclave *enclave;
 	/* See ghost_destroy_enclave() */
-	struct ghost_enclave *__agent_decref_enclave;
+	int __agent_free_cpu_cmd;
 
 	/* For operations with an "implicit" enclave parameter. */
 	struct ghost_enclave *__target_enclave;

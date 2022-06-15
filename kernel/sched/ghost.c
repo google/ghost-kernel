@@ -1888,15 +1888,21 @@ static void ___enclave_add_cpu(struct ghost_enclave *e, int cpu)
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), txn);
 }
 
-/* Caller must hold e->lock and synchronize_rcu() on return */
-static void __enclave_remove_cpu(struct ghost_enclave *e, int cpu)
+/*
+ * Caller must hold e->lock and must synchronize_rcu() before calling
+ * __enclave_free_cpu().
+ */
+static void __enclave_unpublish_cpu(struct ghost_enclave *e, int cpu)
 {
 	VM_BUG_ON(!spin_is_locked(&e->lock));
-	VM_BUG_ON(!cpumask_test_cpu(cpu, &e->cpus));
 
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), NULL);
-	cpumask_clear_cpu(cpu, &e->cpus);
-	ghost_remove_cpu(e, cpu);
+	ghost_unpublish_cpu(e, cpu);
+}
+
+static void __enclave_free_cpu(int cpu)
+{
+	ghost_free_cpu(cpu);
 }
 
 /*
@@ -2016,12 +2022,30 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 		spin_unlock_irqrestore(&e->lock, flags);
 		return;
 	}
-	/* Don't accept new agents into the enclave or changes to its cpuset */
-	e->is_dying = ENCLAVE_IS_DYING;
 
 	/*
 	 * At this point, no one can change the cpus or add new agents, since
 	 * e->is_dying.
+	 */
+	e->is_dying = ENCLAVE_IS_DYING;
+
+	/*
+	 * Unpublishing (and synchronizing) per-cpu pointers prevents any new
+	 * rcu-protected users of per_cpu(enclave) or similar pointers, such as:
+	 * - ghost_txn (a.k.a. &e->cpu_data[cpu]->txn)
+	 * - arguably rq->ghost, which is essentially per_cpu enclave data;
+	 *
+	 * Overall plan:
+	 * Step 1) unpublish per_cpu pointers
+	 * Step 2) sync_rcu
+	 * Step 3) free cpu
+	 *
+	 * For cpus with no agents: no problem.  Just do it all here.  For cpus
+	 * with agents, we need the agents to do it when they exit.  Until then,
+	 * they are using the cpu.  To complicate things, ghost_core.c uses
+	 * pcpu->enclave to determine which ABI to use, which controls stuff
+	 * like whether we call PNT-A or not, which is needed to run the agent.
+	 * So don't unpublish from cpus with agents in this function.
 	 *
 	 * Our goal here is to get the agents (if any) off the cpus.  We could
 	 * try kicking them to CFS, and yanking them out of rq->ghost.agent, but
@@ -2029,41 +2053,30 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 	 * ghost code that assumes they are the agent?
 	 *
 	 * Another approach is to kill them, then wait for them to finish.  When
-	 * they are done, we can return the cpu to the system.  The trick is
+	 * they are done, we can free the cpu back to the system.  The trick is
 	 * that we can't wait while holding locks: they could be blocked on I/O.
 	 * They could also be *this* cpu.
 	 *
-	 * To handle this, we defer the cpu removal until the agent exits from
-	 * ghost.  Since our enclave is dying, we can unlock and not worry about
-	 * any agent joining the enclave or the cpus changing.  Since we don't
-	 * give the cpu back to the system right away, we don't have to worry
-	 * about anyone reusing the rq's agent fields.
-	 *
-	 * Note that pcpu->enclave is still set until the agent task exits a
-	 * given cpu.  We must follow the pattern of:
-	 *   1) pcpu->enclave = NULL
-	 *   2) synchronize_rcu()
-	 *   3) decref the enclave
-	 * because pcpu->enclave is protected and kreffable during
-	 * rcu_read_lock().
-	 *
-	 * All three steps are handled in release_from_ghost().  We tell the
-	 * agent to do this via agent->ghost.__agent_decref_enclave.  This needs
-	 * to be per-agent, and not per-rq, since the moment we return the cpu
-	 * to the system, another enclave and agent can reuse the fields in
-	 * rq->ghost.
+	 * To handle this, we defer the cpu unpub/freeing until the agent exits
+	 * from ghost.  Since our enclave is dying, we can unlock and not worry
+	 * about any agent joining the enclave or the cpus changing.  Since we
+	 * don't give the cpu back to the system right away, we don't have to
+	 * worry about anyone reusing the rq's agent fields.
 	 *
 	 * Note the agent could be leaving ghost of its own volition
-	 * concurrently; the enclave lock ensures that if we see an agent, it
-	 * will remove the cpu when it exits.  And if not, we fully remove it
-	 * here.  We make that decision before we unlock in the loop below.
+	 * concurrently; the enclave lock ensures that if we see an agent in the
+	 * loop below, it will unpub/free the cpu when it exits.  We make that
+	 * decision before we unlock.  That's also why we reuse e->cpus to track
+	 * the cpus that were agentless during the first loop, where we
+	 * unpublish and later free the cpu.
 	 *
-	 * Why do we unlock?  Because send_sig grabs the pi_lock, and the lock
-	 * ordering is pi -> rq -> e.  This is safe, since the lock is no longer
-	 * protecting invariants.  The trick is that we rely on is_dying to
-	 * prevent any of the changes to the enclave that we were concerned with
-	 * (agent arrival or cpu changes).  And once we decide that an agent
-	 * should call __enclave_return_cpu(), that decision is set in stone.
+	 * Why do we unlock inside the loop?  Because send_sig grabs the
+	 * pi_lock, and the lock ordering is pi -> rq -> e.  This is safe, since
+	 * the lock is no longer protecting invariants.  The trick is that we
+	 * rely on is_dying to prevent any of the changes to the enclave that we
+	 * were concerned with (agent arrival or cpu changes).  And once we
+	 * decide that an agent should unpub/free, that decision is set in
+	 * stone.
 	 */
 
 	for_each_cpu(cpu, &e->cpus) {
@@ -2071,12 +2084,19 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 		struct task_struct *agent;
 
 		if (!rq->ghost.agent) {
-			__enclave_remove_cpu(e, cpu);
+			/*
+			 * Explicitly keep cpu on e->cpus to track cpu for the
+			 * freeing loop after sync_rcu().
+			 */
+			__enclave_unpublish_cpu(e, cpu);
 			continue;
 		}
+
+		cpumask_clear_cpu(cpu, &e->cpus);
+
 		agent = rq->ghost.agent;
-		kref_get(&e->kref);
-		agent->ghost.__agent_decref_enclave = e;
+		/* unpub and free, cpu + 1.  0 == noop, 1 == cpu0. */
+		agent->ghost.__agent_free_cpu_cmd = cpu + 1;
 		/*
 		 * We can't force_sig().  The task might be exiting and losing
 		 * its sighand_struct.  send_sig_info() checks for that.  We
@@ -2093,9 +2113,18 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 		put_task_struct(agent);
 		spin_lock_irqsave(&e->lock, flags);
 	}
+
 	spin_unlock_irqrestore(&e->lock, flags);
 
-	synchronize_rcu();	/* Required after removing a cpu */
+	synchronize_rcu();
+
+	spin_lock_irqsave(&e->lock, flags);
+
+	/* These are the non-agent cpus we unpublished already */
+	for_each_cpu(cpu, &e->cpus) {
+		cpumask_clear_cpu(cpu, &e->cpus);
+		__enclave_free_cpu(cpu);
+	}
 
 	/*
 	 * It is safe to reap all tasks in the enclave only _after_
@@ -2109,8 +2138,8 @@ static void __ghost_destroy_enclave(struct ghost_enclave *e)
 	 *
 	 * This is indicated by or'ing ENCLAVE_IS_REAPABLE into 'e->is_dying'.
 	 */
-	spin_lock_irqsave(&e->lock, flags);
 	e->is_dying |= ENCLAVE_IS_REAPABLE;
+
 	spin_unlock_irqrestore(&e->lock, flags);
 
 	kref_get(&e->kref);	/* Reaper gets a kref */
@@ -2161,6 +2190,7 @@ static int ghost_enclave_set_cpus(struct ghost_enclave *e,
 	unsigned long flags;
 	unsigned int cpu;
 	int ret = 0;
+	bool deleted_cpus = false;
 	cpumask_var_t add, del;
 
 	if (!alloc_cpumask_var(&add, GFP_KERNEL))
@@ -2202,13 +2232,20 @@ static int ghost_enclave_set_cpus(struct ghost_enclave *e,
 	if (ret)
 		goto out_e;
 
-	for_each_cpu(cpu, del)
-		__enclave_remove_cpu(e, cpu);
+	for_each_cpu(cpu, del) {
+		deleted_cpus = true;
+		__enclave_unpublish_cpu(e, cpu);
+		cpumask_clear_cpu(cpu, &e->cpus);
+	}
 
 out_e:
 	spin_unlock_irqrestore(&e->lock, flags);
 
-	synchronize_rcu();	/* Required after removing a cpu */
+	if (deleted_cpus) {
+		synchronize_rcu();	/* Required after unpublishing a cpu */
+		for_each_cpu(cpu, del)
+			__enclave_free_cpu(cpu);
+	}
 
 	free_cpumask_var(add);
 	free_cpumask_var(del);
@@ -4525,21 +4562,23 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		ghost_claim_and_kill_txn(rq->cpu, GHOST_TXN_NO_AGENT);
 
 		/* See __ghost_destroy_enclave() */
-		if (p->ghost.__agent_decref_enclave) {
+		if (p->ghost.__agent_free_cpu_cmd) {
 			/* Agents should only exit, never setsched out. */
 			WARN_ON_ONCE(p->state != TASK_DEAD);
-			VM_BUG_ON(p->ghost.__agent_decref_enclave != e);
-			__enclave_remove_cpu(e, rq->cpu);
+			WARN_ON_ONCE(p->ghost.__agent_free_cpu_cmd - 1 !=
+				     rq->cpu);
+			__enclave_unpublish_cpu(e, rq->cpu);
 			/*
-			 * At this moment, this cpu can be added to a new
-			 * enclave (or our previous enclave!).
+			 * Don't clear __agent_free_cpu_cmd yet.  We've
+			 * unpublished (Step 1), but still need to sync_rcu and
+			 * free the cpu.  Those happen via
+			 * ghost_delayed_put_task_struct().
 			 *
-			 * Additionally, once we unlock the rq, a new agent task
-			 * can attach to this cpu and use the rq->ghost fields.
-			 *
-			 * We've set pcpu->enclave = NULL (step 1).  Steps 2 and
-			 * 3 (sync rcu and decref) are handled when we return to
-			 * _task_dead_ghost() call_rcu.
+			 * Until we free the cpu, no task can use rq->ghost's
+			 * agent fields.  There are two cases:
+			 * 1) No task can enter our old, dying enclave, let
+			 * alone become an agent.
+			 * 2) No new enclave can use the cpu.
 			 */
 		}
 	}
@@ -4566,13 +4605,10 @@ static void ghost_delayed_put_task_struct(struct rcu_head *rhp)
 {
 	struct task_struct *tsk = container_of(rhp, struct task_struct,
 					       ghost.rcu);
-	/*
-	 * Step 3 of "destroyed with agent": decref.
-	 * See __ghost_destroy_enclave().
-	 */
-	if (tsk->ghost.__agent_decref_enclave) {
-		kref_put(&tsk->ghost.__agent_decref_enclave->kref,
-			 enclave_release);
+
+	if (tsk->ghost.__agent_free_cpu_cmd) {
+		/* Step 3 from ghost_destroy_enclave(). */
+		__enclave_free_cpu(tsk->ghost.__agent_free_cpu_cmd - 1);
 	}
 	put_task_struct(tsk);
 }
@@ -5870,7 +5906,7 @@ void ghost_commit_all_greedy_txns(void)
 	 * Note that e's cpu mask could be changed concurrently, with cpus added
 	 * or removed.  This is benign.  First, any commits will look at the
 	 * rcu-protected ghost_txn pointer.  That's what really matters, and
-	 * any caller to __enclave_remove_cpu() will synchronize_rcu().
+	 * any caller to __enclave_unpublish_cpu() will synchronize_rcu().
 	 *
 	 * Furthermore, if a cpu is added while we are looking (which is not
 	 * protected by RCU), it's not a big deal.  This is a greedy commit, and
