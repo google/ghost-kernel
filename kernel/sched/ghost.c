@@ -7954,14 +7954,21 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 {
 	int this_cpu = smp_processor_id();
 	struct rq *rq;
+	struct ghost_enclave *this_enclave = get_target_enclave();
 
 	if (cpu < 0)
 		return -EINVAL;
 	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
 		return -ERANGE;
-	if (!check_same_enclave(this_cpu, cpu))
+	if (WARN_ON_ONCE(!this_enclave))
 		return -EXDEV;
 
+	/* RCU protects the allocation of cpu to the enclave */
+	rcu_read_lock();
+	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
+		rcu_read_unlock();
+		return -EXDEV;
+	}
 	rq = cpu_rq(cpu);
 	WRITE_ONCE(rq->ghost.prev_resched_seq, cpu_seqnum);
 	if (cpu == this_cpu) {
@@ -7970,7 +7977,7 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 	} else {
 		resched_cpu_unlocked(cpu);
 	}
-
+	rcu_read_unlock();
 	return 0;
 }
 
