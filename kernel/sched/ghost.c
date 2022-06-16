@@ -129,26 +129,6 @@ static inline gtid_t gtid(struct task_struct *p)
 	return p->gtid;
 }
 
-/* True if X and Y have the same enclave, including having no enclave. */
-static bool check_same_enclave(int cpu_x, int cpu_y)
-{
-	struct ghost_enclave *x, *y;
-
-	if (WARN_ON_ONCE(cpu_x < 0 || cpu_y < 0
-			 || cpu_x >= nr_cpu_ids || cpu_y >= nr_cpu_ids))
-		return false;
-
-	if (cpu_x == cpu_y)
-		return true;
-
-	rcu_read_lock();
-	x = rcu_dereference(per_cpu(enclave, cpu_x));
-	y = rcu_dereference(per_cpu(enclave, cpu_y));
-	rcu_read_unlock();
-
-	return x == y;
-}
-
 /* enclave::is_dying */
 #define ENCLAVE_IS_DYING	(1U << 0)
 #define ENCLAVE_IS_REAPABLE	(1U << 1)
@@ -4696,20 +4676,12 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
  *
  * If it was blocked_in_run, clear it and reschedule, which ensures it wakes up.
  *
- * Returns 0 on success, -error on failure.
+ * Caller must ensure 'cpu' is valid.
  */
-static int __ghost_wake_agent_on(int cpu, int this_cpu,
-				 bool check_caller_enclave)
+static void __ghost_wake_agent_on(int cpu)
 {
 	struct rq *dst_rq;
-
-	if (cpu < 0)
-		return -EINVAL;
-	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
-		return -ERANGE;
-
-	if (check_caller_enclave && !check_same_enclave(this_cpu, cpu))
-		return -EXDEV;
+	int this_cpu;
 
 	dst_rq = cpu_rq(cpu);
 
@@ -4736,7 +4708,7 @@ static int __ghost_wake_agent_on(int cpu, int this_cpu,
 	 * mostly for paranoia.
 	 */
 	if (!READ_ONCE(dst_rq->ghost.blocked_in_run))
-		return 0;
+		return;
 
 	/*
 	 * We can't write blocked_in_run, since we don't hold the RQ lock.
@@ -4745,38 +4717,33 @@ static int __ghost_wake_agent_on(int cpu, int this_cpu,
 	 * an optimization to reduce the number of rescheds.
 	 */
 	if (READ_ONCE(dst_rq->ghost.agent_should_wake))
-		return 0;
+		return;
 	WRITE_ONCE(dst_rq->ghost.agent_should_wake, true);
 
 	/* Write must come before the IPI/resched */
 	smp_wmb();
 
+	/*
+	 * Likely overkill.  If we get preempted and moved off of or onto the
+	 * target cpu, that cpu did a reschedule, which is what we wanted.
+	 */
+	this_cpu = get_cpu();
 	if (cpu == this_cpu) {
 		set_tsk_need_resched(dst_rq->curr);
 		set_preempt_need_resched();
 	} else {
 		resched_cpu_unlocked(cpu);
 	}
-	return 0;
+	put_cpu();
 }
 
 static void ghost_wake_agent_on(int cpu)
 {
-	int this_cpu = get_cpu();
-
-	__ghost_wake_agent_on(cpu, this_cpu, /*check_caller_enclave=*/ false);
-	put_cpu();
-}
-
-static int ghost_wake_agent_on_check(int cpu)
-{
-	int this_cpu = get_cpu();
-	int ret;
-
-	ret = __ghost_wake_agent_on(cpu, this_cpu,
-				    /*check_caller_enclave=*/ true);
-	put_cpu();
-	return ret;
+	if (cpu == -1)
+		return;
+	if (WARN_ON_ONCE(cpu < -1 || cpu >= nr_cpu_ids || !cpu_online(cpu)))
+		return;
+	__ghost_wake_agent_on(cpu);
 }
 
 static void ghost_wake_agent_of(struct task_struct *p)
@@ -7940,7 +7907,25 @@ done:
 
 static int bpf_wake_agent(int cpu)
 {
-	return ghost_wake_agent_on_check(cpu);
+	struct ghost_enclave *this_enclave = get_target_enclave();
+
+	if (cpu < 0)
+		return -EINVAL;
+	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
+		return -ERANGE;
+	if (WARN_ON_ONCE(!this_enclave))
+		return -EXDEV;
+
+	/* RCU protects the allocation of cpu to the enclave */
+	rcu_read_lock();
+	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
+		rcu_read_unlock();
+		return -EXDEV;
+	}
+	__ghost_wake_agent_on(cpu);
+	rcu_read_unlock();
+
+	return 0;
 }
 
 /*
