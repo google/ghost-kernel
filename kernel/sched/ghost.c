@@ -5163,12 +5163,13 @@ done:
 }
 
 static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
-			       int cpu, bool check_caller_enclave)
+			       int cpu)
 {
 	struct rq_flags rf;
 	struct rq *rq;
-	int err = 0;
+	int ret = 0;
 	struct task_struct *next;
+	struct ghost_enclave *this_enclave = get_target_enclave();
 
 	const int supported_flags = RTLA_ON_PREEMPT	|
 				    RTLA_ON_BLOCKED	|
@@ -5189,29 +5190,31 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	if (!run_flags_valid(run_flags, supported_flags, gtid))
 		return -EINVAL;
 
-	if (check_caller_enclave &&
-	    !check_same_enclave(smp_processor_id(), cpu)) {
+	if (WARN_ON_ONCE(!this_enclave))
+		return -EXDEV;
+
+	/* RCU for both find_task_by_gtid and to protect pcpu->enclave. */
+	rcu_read_lock();
+
+	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
+		rcu_read_unlock();
 		return -EXDEV;
 	}
 
-	rcu_read_lock();
 	next = find_task_by_gtid(gtid);
 	if (next == NULL || next->ghost.agent) {
 		rcu_read_unlock();
 		return -ENOENT;
 	}
 	rq = task_rq_lock(next, &rf);
-	rcu_read_unlock();
 
-	err = validate_next_task(rq, next, task_barrier, /*state=*/ NULL);
-	if (err) {
-		task_rq_unlock(rq, next, &rf);
-		return err;
-	}
+	ret = validate_next_task(rq, next, task_barrier, /*state=*/ NULL);
+	if (ret)
+		goto out_unlock;
 
 	if (task_running(rq, next)) {
-		task_rq_unlock(rq, next, &rf);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto out_unlock;
 	}
 
 	rq = ghost_move_task(rq, next, cpu, &rf);
@@ -5221,14 +5224,14 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	 * see it.  (Latched tasks are cleared when the agent exits).
 	 */
 	if (unlikely(!rq->ghost.agent)) {
-		task_rq_unlock(rq, next, &rf);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_unlock;
 	}
 
 	if ((run_flags & DO_NOT_PREEMPT) &&
 	    (task_has_ghost_policy(rq->curr) || rq->ghost.latched_task)) {
-		task_rq_unlock(rq, next, &rf);
-		return -ESTALE;
+		ret = -ESTALE;
+		goto out_unlock;
 	}
 
 	/*
@@ -5242,14 +5245,18 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	 * latched task or for a higher priority task when it relocks.
 	 */
 	if (!rq->ghost.in_pnt_bpf && !ghost_can_schedule(rq, gtid)) {
-		task_rq_unlock(rq, next, &rf);
-		return -ENOSPC;
+		ret = -ENOSPC;
+		goto out_unlock;
 	}
 
 	ghost_set_pnt_state(rq, next, run_flags);
-	task_rq_unlock(rq, next, &rf);
+	ret = 0;
 
-	return 0;
+out_unlock:
+	task_rq_unlock(rq, next, &rf);
+	rcu_read_unlock();
+
+	return ret;
 }
 
 static inline bool _ghost_txn_ready(int cpu, int *commit_flags)
@@ -7944,10 +7951,7 @@ static int bpf_wake_agent(int cpu)
  */
 static int bpf_run_gtid(s64 gtid, u32 task_barrier, int run_flags, int cpu)
 {
-	bool check_caller_enclave = (cpu != smp_processor_id());
-
-	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu,
-				   check_caller_enclave);
+	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu);
 }
 
 static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
