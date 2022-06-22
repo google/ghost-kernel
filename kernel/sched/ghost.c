@@ -1330,13 +1330,14 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 			rq->ghost.check_prev_preemption = false;
 			/*
 			 * ELIDE_PREEMPT was set when we latched the presently
-			 * set rq->ghost.latched_task, which we will pick below.
+			 * set rq->ghost.latched_task, which we will pick below
+			 * if it is not NULL.  It could be NULL if the agent ran
+			 * the GHOST_NULL_GTID.
+			 *
 			 * Eliding the preemption applies to prev's preemption,
-			 * not to any future tasks (particularly the
-			 * latched_task we're about to run).
+			 * not to any future tasks.
 			 */
 			rq->ghost.run_flags &= ~ELIDE_PREEMPT;
-			WARN_ON_ONCE(!rq->ghost.latched_task);
 		}
 	} else {
 		WARN_ON_ONCE(rq->ghost.switchto_count > 0);
