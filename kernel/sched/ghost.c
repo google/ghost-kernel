@@ -7128,7 +7128,7 @@ static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
 	struct ghost_enclave *e = of_to_e(of);
 	struct ghost_enclave *old_target;
 	ssize_t ret;
-	pid_t pid;
+	long long pid;
 	struct task_struct *t;
 
 	/* See _ghost_setscheduler() for the meaning of sched_priority. */
@@ -7136,13 +7136,16 @@ static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
 		.sched_priority = -2,
 	};
 
-	ret = kstrtoint(buf, 0, &pid);
+	ret = kstrtoll(buf, 0, &pid);
 	if (ret)
 		return ret;
 
 	if (pid) {
 		rcu_read_lock();
-		t = find_task_by_vpid(pid);
+		if (gtid_seqnum(pid))
+			t = find_task_by_gtid(pid); /* pid is actually a gtid */
+		else
+			t = find_task_by_vpid(pid);
 		if (!t) {
 			rcu_read_unlock();
 			return -ESRCH;

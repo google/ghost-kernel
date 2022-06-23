@@ -2321,6 +2321,8 @@ void ghost_cpu_idle(void);
 
 unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);
+/* Returns 0 if this is not a gtid */
+uint64_t gtid_seqnum(gtid_t gtid);
 void init_ghost_rq(struct ghost_rq *ghost_rq);
 
 int select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags);

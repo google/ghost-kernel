@@ -620,6 +620,29 @@ int64_t ghost_alloc_gtid(struct task_struct *p)
 	return gtid;
 }
 
+uint64_t gtid_seqnum(gtid_t gtid)
+{
+	const uint64_t mask = (1UL << GHOST_TID_SEQNUM_BITS) - 1;
+	uint64_t seqnum;
+
+	BUILD_BUG_ON(GHOST_TID_PID_BITS + GHOST_TID_SEQNUM_BITS + 1 != 64);
+
+	/*
+	 * seqnum bits has to be larger that pid bits for the below shifting
+	 * to be correct in detecting when we actually have a seqnum, since
+	 * the seqnum is in the lower ordered bits.
+	 */
+	BUILD_BUG_ON(GHOST_TID_PID_BITS >= GHOST_TID_SEQNUM_BITS);
+
+	/* not a gtid */
+	if (!(gtid >> GHOST_TID_SEQNUM_BITS))
+		return 0;
+
+	seqnum = gtid & mask;
+	WARN_ON_ONCE(!seqnum);
+	return seqnum;
+}
+
 void ghost_copy_process_epilogue(struct task_struct *p)
 {
 	struct ghost_enclave *e = p->ghost.enclave;
