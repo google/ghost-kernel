@@ -4979,6 +4979,18 @@ static inline bool commit_flags_valid(int commit_flags, int valid_commit_flags)
 	return true;
 }
 
+static inline bool check_same_enclave(int cpu1, int cpu2)
+{
+	const struct ghost_enclave *e1, *e2;
+
+	VM_BUG_ON(preemptible());
+
+	e1 = rcu_dereference_sched(per_cpu(enclave, cpu1));
+	e2 = rcu_dereference_sched(per_cpu(enclave, cpu2));
+
+	return (e1 && e2 && e1 == e2);
+}
+
 /*
  * ghOSt API to yield local cpu or ping a remote cpu.
  *
@@ -5024,7 +5036,7 @@ static int ghost_run(struct ghost_enclave *e, struct ghost_ioc_run __user *arg)
 
 	switch (gtid) {
 	case GHOST_NULL_GTID:	/* yield on local cpu */
-		if (run_cpu != this_cpu)
+		if (run_cpu != this_cpu || !current->ghost.agent)
 			error = -EINVAL;
 		break;
 	case GHOST_AGENT_GTID:	/* ping agent */
@@ -5049,6 +5061,13 @@ static int ghost_run(struct ghost_enclave *e, struct ghost_ioc_run __user *arg)
 
 	/* ping agent */
 	if (gtid == GHOST_AGENT_GTID) {
+		/*
+		 * N.B. we cannot use check_same_enclave() here because any
+		 * thread in the agent process is allowed to ping an agent.
+		 * For e.g. the main thread scheduled by CFS may be running
+		 * on a CPU outside the enclave and will ping agents when
+		 * exiting.
+		 */
 		if (same_process(agent, current)) {
 			/* "serialize" with remote-agent doing a local run */
 			agent_barrier_inc(rq);
@@ -5309,7 +5328,8 @@ static inline bool ghost_claim_txn(int cpu, int where)
 		    GHOST_TXN_READY, raw_smp_processor_id()) == GHOST_TXN_READY;
 }
 
-static inline bool txn_commit_allowed(struct rq *rq, gtid_t gtid, bool sync)
+static inline bool txn_commit_allowed(struct rq *rq, gtid_t gtid, bool sync,
+				      int this_cpu)
 {
 	/*
 	 * Asynchronous commit is instigated by kernel and thus always
@@ -5318,9 +5338,12 @@ static inline bool txn_commit_allowed(struct rq *rq, gtid_t gtid, bool sync)
 	if (!sync)
 		return true;
 
-	/* An agent is always allowed to commit synchronously. */
+	/*
+	 * An agent is always allowed to commit synchronously within the
+	 * confines of its enclave.
+	 */
 	if (current->ghost.agent)
-		return true;
+		return check_same_enclave(this_cpu, cpu_of(rq));
 
 	/*
 	 * A non-agent task is allowed to ping an agent as long as both
@@ -5448,6 +5471,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 					   INC_AGENT_BARRIER_ON_FAILURE	|
 					   0;
 
+	const int this_cpu = raw_smp_processor_id();  /* preemption disabled */
+
 	VM_BUG_ON(preemptible());
 	VM_BUG_ON(commit_state == NULL);
 	VM_BUG_ON(need_rendezvous == NULL);
@@ -5455,7 +5480,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	*need_rendezvous = false;
 
-	if (!txn || txn->state != raw_smp_processor_id()) {
+	if (!txn || txn->state != this_cpu) {
 		state = GHOST_TXN_INVALID_CPU;
 		goto out;
 	}
@@ -5564,7 +5589,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		goto out;
 	}
 
-	if (unlikely(!txn_commit_allowed(rq, gtid, sync))) {
+	if (unlikely(!txn_commit_allowed(rq, gtid, sync, this_cpu))) {
 		state = GHOST_TXN_NOT_PERMITTED;
 		goto out;
 	}
@@ -5689,7 +5714,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 
 	if (!local_run) {
 		if (!sync) {
-			VM_BUG_ON(run_cpu != raw_smp_processor_id());
+			VM_BUG_ON(run_cpu != this_cpu);
 			/*
 			 * Agents have absolute priority over normal ghost
 			 * tasks so no need to reschedule when the txn is
