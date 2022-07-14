@@ -5163,6 +5163,19 @@ struct bpf_sk_lookup {
 #define GHOST_BPF
 
 struct bpf_ghost_sched {
+	__u8 agent_on_rq;	/* there is an agent, it can run if poked */
+	__u8 agent_runnable;	/* there is an agent, it will run */
+	__u8 might_yield;	/* other classes (CFS) probably want to run.
+				 * the agent will supercede these.  latched
+				 * tasks will not.
+				 */
+	__u8 dont_idle;		/* set true to prevent the cpu from idling */
+	__u64 next_gtid;	/* scheduler will run this next, unless you do
+				 * something (or agent_runnable or
+				 * should_yield).  This is either a latched task
+				 * or was current and still TASK_RUNNING in PNT.
+				 * It will be preempted if you latch.
+				 */
 };
 
 /*
