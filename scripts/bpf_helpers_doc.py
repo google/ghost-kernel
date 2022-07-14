@@ -532,6 +532,8 @@ class PrinterHelpers(Printer):
         header = '''\
 /* This is auto-generated file. See bpf_helpers_doc.py for details. */
 
+#define GHOST_BPF
+
 /* Forward declarations of BPF structs */'''
 
         print(header)
