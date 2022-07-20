@@ -246,6 +246,12 @@ enum bpf_attach_type {
 
 #define MAX_BPF_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
 
+enum {
+	BPF_GHOST_SCHED_PNT = 2000,
+	BPF_GHOST_MSG_SEND,
+	__MAX_BPF_GHOST_ATTACH_TYPE
+};
+
 enum bpf_link_type {
 	BPF_LINK_TYPE_UNSPEC = 0,
 	BPF_LINK_TYPE_RAW_TRACEPOINT = 1,
