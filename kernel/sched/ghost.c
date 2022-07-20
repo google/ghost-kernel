@@ -827,7 +827,7 @@ static bool check_runnable_timeout(struct ghost_enclave *e, struct rq *rq)
 		if (ktime_before(ktime_add_safe(p->ghost.last_runnable_at,
 						timeout),
 				 ktime_get())) {
-			pr_info("enclave violation: enclave_%lu failed to run pid %u for over %lums\n",
+			pr_info("enclave violation: enclave_%lu failed to run pid %u for over %llums\n",
 				e->id, p->pid, ktime_to_ms(timeout));
 			ok = false;
 		}
