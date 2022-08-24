@@ -5262,6 +5262,42 @@ static inline bool ghost_txn_succeeded(int state)
 	return state == GHOST_TXN_COMPLETE;
 }
 
+static inline struct ghost_txn *_ghost_get_txn_ptr(int cpu)
+{
+	int this_cpu = raw_smp_processor_id();
+	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, cpu));
+
+	VM_BUG_ON(preemptible());
+	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
+	if (txn && txn->state != this_cpu) {
+		/* A buggy agent can trip this. */
+		pr_info("txn->state for cpu %d was not %d!", txn->state,
+			this_cpu);
+	}
+
+	return txn;
+}
+
+static inline void _ghost_set_txn_state(struct ghost_txn *txn,
+					enum ghost_txn_state state)
+{
+	/*
+	 * Set the time with a relaxed store since we update the txn state below
+	 * with a release store. Userspace syncs with the kernel on that release
+	 * store, so the release store acts a barrier.
+	 */
+	txn->commit_time = ktime_get_ns();
+	smp_store_release(&txn->state, state);
+}
+
+static void ghost_set_txn_state(int cpu, enum ghost_txn_state state)
+{
+	struct ghost_txn *txn = _ghost_get_txn_ptr(cpu);
+
+	if (txn)
+		_ghost_set_txn_state(txn, state);
+}
+
 /*
  * Caller is responsible for claiming txn (before calling this function)
  * and finalizing it (after this function returns).
@@ -5600,42 +5636,6 @@ out:
 
 	*commit_state = state;
 	return resched;
-}
-
-static inline struct ghost_txn *_ghost_get_txn_ptr(int cpu)
-{
-	int this_cpu = raw_smp_processor_id();
-	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, cpu));
-
-	VM_BUG_ON(preemptible());
-	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
-	if (txn && txn->state != this_cpu) {
-		/* A buggy agent can trip this. */
-		pr_info("txn->state for cpu %d was not %d!", txn->state,
-			this_cpu);
-	}
-
-	return txn;
-}
-
-static inline void _ghost_set_txn_state(struct ghost_txn *txn,
-					enum ghost_txn_state state)
-{
-	/*
-	 * Set the time with a relaxed store since we update the txn state below
-	 * with a release store. Userspace syncs with the kernel on that release
-	 * store, so the release store acts a barrier.
-	 */
-	txn->commit_time = ktime_get_ns();
-	smp_store_release(&txn->state, state);
-}
-
-static void ghost_set_txn_state(int cpu, enum ghost_txn_state state)
-{
-	struct ghost_txn *txn = _ghost_get_txn_ptr(cpu);
-
-	if (txn)
-		_ghost_set_txn_state(txn, state);
 }
 
 static inline void ghost_poison_txn(int cpu)
