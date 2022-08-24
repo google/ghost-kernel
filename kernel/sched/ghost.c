@@ -3933,17 +3933,11 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
 	struct ghost_msg_payload_cpu_tick *payload = &msg->cpu_tick;
-	struct ghost_enclave *e;
 
 	if (cpu_skip_message(rq))
 		return false;
-	rcu_read_lock();
-	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
-	if (!e || !e->deliver_ticks) {
-		rcu_read_unlock();
+	if (!__check_cpu_enclave_bool(cpu_of(rq), deliver_ticks))
 		return false;
-	}
-	rcu_read_unlock();
 
 	msg->type = MSG_CPU_TICK;
 	payload->cpu = cpu_of(rq);

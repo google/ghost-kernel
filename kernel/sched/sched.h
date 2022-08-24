@@ -2285,6 +2285,18 @@ const static struct ghost_abi __##name##_ghost_abi	\
 
 _GHOST_MAYBE_CONST DECLARE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
+/* Checks if the cpu belongs to an enclave and that enclave's var is true. */
+#define __check_cpu_enclave_bool(cpu, var)			\
+({								\
+	struct ghost_enclave *e;				\
+	bool ret;						\
+	rcu_read_lock();					\
+	e = rcu_dereference(per_cpu(enclave, (cpu)));		\
+	ret = e && e->var;					\
+	rcu_read_unlock();					\
+	ret;							\
+})
+
 /*
  * Some functions operate on an enclave, but we are unable to easily pass the
  * enclave parameter.  This enclave is the `target` for an operation.
