@@ -5631,6 +5631,8 @@ out:
 		agent_barrier_inc(rq);
 	}
 
+	if (rendezvous == GHOST_NO_RENDEZVOUS)
+		ghost_set_txn_state(run_cpu, state);
 	if (rq)
 		rq_unlock_irqrestore(rq, &rf);
 
@@ -5667,7 +5669,6 @@ static bool ghost_commit_txn(int run_cpu, bool sync, int *commit_state)
 	if (commit_state)
 		*commit_state = state;
 
-	ghost_set_txn_state(run_cpu, state);
 	return resched;
 }
 
