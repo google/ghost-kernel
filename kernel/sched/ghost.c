@@ -43,6 +43,9 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
  */
 static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
 
+/* Track whether or not this cpu is available to ghost */
+static DEFINE_PER_CPU(bool, cpu_available);
+
 struct ghost_sw_region {
 	struct list_head list;			/* ghost_enclave glue */
 	uint32_t alloc_scan_start;		/* allocator starts scan here */
@@ -3879,6 +3882,14 @@ static inline int __produce_for_task(struct task_struct *p,
 		payload = &msg->cpu_not_idle;
 		payload_size = sizeof(msg->cpu_not_idle);
 		break;
+	case MSG_CPU_AVAILABLE:
+		payload = &msg->cpu_available;
+		payload_size = sizeof(msg->cpu_available);
+		break;
+	case MSG_CPU_BUSY:
+		payload = &msg->cpu_busy;
+		payload_size = sizeof(msg->cpu_busy);
+		break;
 	default:
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
@@ -3940,6 +3951,38 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 		return false;
 
 	msg->type = MSG_CPU_TICK;
+	payload->cpu = cpu_of(rq);
+
+	return !produce_for_agent(rq, msg);
+}
+
+static inline bool cpu_deliver_msg_cpu_available(struct rq *rq)
+{
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_cpu_available *payload = &msg->cpu_available;
+
+	if (cpu_skip_message(rq))
+		return false;
+	if (!__check_cpu_enclave_bool(cpu_of(rq), deliver_cpu_availability))
+		return false;
+
+	msg->type = MSG_CPU_AVAILABLE;
+	payload->cpu = cpu_of(rq);
+
+	return !produce_for_agent(rq, msg);
+}
+
+static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq)
+{
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_cpu_busy *payload = &msg->cpu_busy;
+
+	if (cpu_skip_message(rq))
+		return false;
+	if (!__check_cpu_enclave_bool(cpu_of(rq), deliver_cpu_availability))
+		return false;
+
+	msg->type = MSG_CPU_BUSY;
 	payload->cpu = cpu_of(rq);
 
 	return !produce_for_agent(rq, msg);
@@ -6928,6 +6971,38 @@ static struct kernfs_ops gf_ops_e_ctl = {
 	.ioctl			= gf_ctl_ioctl,
 };
 
+static int gf_deliver_cpu_availability_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->deliver_cpu_availability));
+	return 0;
+}
+
+static ssize_t gf_deliver_cpu_availability_write(struct kernfs_open_file *of,
+						 char *buf, size_t len,
+						 loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->deliver_cpu_availability, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_deliver_cpu_availability = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_deliver_cpu_availability_show,
+	.write			= gf_deliver_cpu_availability_write,
+};
+
 static int gf_deliver_ticks_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -7279,6 +7354,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.ops		= &gf_ops_e_ctl,
 	},
 	{
+		.name		= "deliver_cpu_availability",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_deliver_cpu_availability,
+	},
+	{
 		.name		= "deliver_ticks",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_deliver_ticks,
@@ -7532,12 +7612,16 @@ static void prepare_task_switch(struct rq *rq, struct task_struct *prev,
 	struct ghost_status_word *agent_sw;
 
 	if (rq->ghost.agent) {
+
+		bool is_available = task_has_ghost_policy(next) ||
+				    next == rq->idle;
+
 		/*
 		 * XXX pick_next_task_fair() can return 'rq->idle' via
 		 * core_tag_pick_next_matching_rendezvous().
 		 */
 		agent_sw = rq->ghost.agent->ghost.status_word;
-		if (!task_has_ghost_policy(next) && next != rq->idle) {
+		if (!is_available) {
 			ghost_sw_clear_flag(agent_sw, GHOST_SW_CPU_AVAIL);
 			if (rq->ghost.run_flags & NEED_CPU_NOT_IDLE) {
 				rq->ghost.run_flags &= ~NEED_CPU_NOT_IDLE;
@@ -7545,6 +7629,13 @@ static void prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			}
 		} else {
 			ghost_sw_set_flag(agent_sw, GHOST_SW_CPU_AVAIL);
+		}
+		if (is_available != per_cpu(cpu_available, cpu_of(rq))) {
+			if (is_available)
+				cpu_deliver_msg_cpu_available(rq);
+			else
+				cpu_deliver_msg_cpu_busy(rq);
+			per_cpu(cpu_available, cpu_of(rq)) = is_available;
 		}
 	}
 
