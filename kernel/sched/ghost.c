@@ -5353,17 +5353,21 @@ static inline bool ghost_txn_succeeded(int state)
 	return state == GHOST_TXN_COMPLETE;
 }
 
-static inline struct ghost_txn *_ghost_get_txn_ptr(int cpu)
+static inline struct ghost_txn *_ghost_get_txn_ptr(int cpu,
+						   enum ghost_txn_state want)
 {
-	int this_cpu = raw_smp_processor_id();
-	struct ghost_txn *txn = rcu_dereference(per_cpu(ghost_txn, cpu));
+	struct ghost_txn *txn;
+	enum ghost_txn_state state;
 
-	VM_BUG_ON(preemptible());
 	VM_BUG_ON(cpu < 0 || cpu >= nr_cpu_ids);
-	if (txn && txn->state != this_cpu) {
+
+	txn = rcu_dereference(per_cpu(ghost_txn, cpu));
+	state = READ_ONCE(txn->state);
+
+	if (txn && state != want) {
 		/* A buggy agent can trip this. */
-		pr_info("txn->state for cpu %d was not %d!", txn->state,
-			this_cpu);
+		pr_info("txn->state for cpu%d: want %d, got %d", cpu,
+			want, state);
 	}
 
 	return txn;
@@ -5383,7 +5387,17 @@ static inline void _ghost_set_txn_state(struct ghost_txn *txn,
 
 static void ghost_set_txn_state(int cpu, enum ghost_txn_state state)
 {
-	struct ghost_txn *txn = _ghost_get_txn_ptr(cpu);
+	int this_cpu;
+	struct ghost_txn *txn;
+
+	VM_BUG_ON(preemptible());
+
+	/*
+	 * Make sure that the transaction is claimed by 'this_cpu' before
+	 * updating its state.
+	 */
+	this_cpu = raw_smp_processor_id();
+	txn = _ghost_get_txn_ptr(cpu, this_cpu);
 
 	if (txn)
 		_ghost_set_txn_state(txn, state);
@@ -5722,8 +5736,8 @@ out:
 		agent_barrier_inc(rq);
 	}
 
-	if (rendezvous == GHOST_NO_RENDEZVOUS)
-		ghost_set_txn_state(run_cpu, state);
+	ghost_set_txn_state(run_cpu, state);
+
 	if (rq)
 		rq_unlock_irqrestore(rq, &rf);
 
@@ -5962,11 +5976,11 @@ static int ghost_sync_group(struct ghost_enclave *e,
 	}
 
 	/*
-	 * Commit transactions. We have the following invariant at the end
-	 * of the loop:
-	 * 'failed'	'cpumask'
-	 * false	all sync_group cpus.
-	 * true		sync_group subset with successfully committed txns.
+	 * Commit transactions.
+	 *
+	 * If the sync_group commit is successful then 'txn->state' for all
+	 * txns in 'cpumask' is GHOST_TXN_COMPLETE otherwise at least one
+	 * 'txn->state' must indicate a failed state.
 	 *
 	 * In either case 'ipimask' contains the CPUs that must be interrupted
 	 * to observe the updated scheduling state. It is always a a subset of
@@ -6001,7 +6015,6 @@ static int ghost_sync_group(struct ghost_enclave *e,
 				rq_unlock_irqrestore(rq, &rf);
 			}
 			ghost_poison_txn(cpu);
-			__cpumask_clear_cpu(cpu, cpumask);
 			continue;
 		}
 
@@ -6011,8 +6024,6 @@ static int ghost_sync_group(struct ghost_enclave *e,
 			VM_BUG_ON(resched);
 			VM_BUG_ON(need_rendezvous);
 			failed = true;
-			ghost_set_txn_state(cpu, state);
-			__cpumask_clear_cpu(cpu, cpumask);
 		} else {
 			if (resched) {
 				VM_BUG_ON(!need_rendezvous);
@@ -6046,19 +6057,25 @@ static int ghost_sync_group(struct ghost_enclave *e,
 	for_each_cpu(cpu, rendmask)
 		ghost_reached_rendezvous(cpu, target);
 
-	state = failed ? GHOST_TXN_POISONED : GHOST_TXN_COMPLETE;
-	for_each_cpu(cpu, cpumask) {
-		struct ghost_txn *txn = _ghost_get_txn_ptr(cpu);
+	if (failed) {
+		/*
+		 * The commit failed but the agent retains ownership
+		 * of the transactions in the sync_group. The agent
+		 * can release ownership after it has inspected the
+		 * reason for failure.
+		 */
+	} else {
+		for_each_cpu(cpu, cpumask) {
+			struct ghost_txn *txn =
+				_ghost_get_txn_ptr(cpu, GHOST_TXN_COMPLETE);
 
-		if (!txn) {
 			/*
 			 * We've committed, but the cpu has since been removed
 			 * from the enclave.  Possibly it's destroyed.
 			 */
-			continue;
-		}
-		_ghost_set_txn_state(txn, state);
-		if (!failed) {
+			if (!txn)
+				continue;
+
 			/*
 			 * Release ownership in case we end up scheduling on
 			 * this cpu (thus precluding the agent from doing so
@@ -6073,13 +6090,6 @@ static int ghost_sync_group(struct ghost_enclave *e,
 			 * distinguish between local/remote sync commits).
 			 */
 			smp_store_release(&txn->u.sync_group_owner, -1);
-		} else {
-			/*
-			 * The commit failed but the agent retains ownership
-			 * of the transactions in the sync_group. The agent
-			 * can release ownership after it has inspected the
-			 * reason for failure.
-			 */
 		}
 	}
 
