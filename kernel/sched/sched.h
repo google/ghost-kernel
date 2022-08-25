@@ -191,8 +191,9 @@ struct ghost_enclave {
 	bool switchto_disabled;
 	bool wake_on_waker_cpu;
 	bool commit_at_tick;
-	bool deliver_ticks;
+	bool deliver_agent_runnability;
 	bool deliver_cpu_availability;
+	bool deliver_ticks;
 	bool live_dangerously;
 
 	unsigned long id;

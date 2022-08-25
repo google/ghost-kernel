@@ -67,6 +67,8 @@ static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
 				     bool latched_preempt);
 static bool cpu_deliver_msg_tick(struct rq *rq);
+static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq);
+static inline bool cpu_deliver_msg_agent_wakeup(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
 static int agent_target_cpu(struct rq *rq);
 static inline bool ghost_txn_ready(int cpu);
@@ -749,29 +751,30 @@ static void _dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	if (!spurious)
 		invalidate_cached_tasks(rq, p);
 
+	if (is_agent(rq, p))
+		WARN_ON_ONCE(rq->ghost.blocked_in_run && !spurious);
+
 	if (sleeping) {
 		WARN_ON_ONCE(!(sw->flags & GHOST_SW_TASK_RUNNABLE));
 		ghost_sw_clear_flag(sw, GHOST_SW_TASK_RUNNABLE);
-	}
 
-	if (is_agent(rq, p)) {
-		WARN_ON_ONCE(rq->ghost.blocked_in_run && !spurious);
-		return;
-	}
+		if (is_agent(rq, p)) {
+			cpu_deliver_msg_agent_blocked(rq);
+		} else {
+			WARN_ON_ONCE(p->ghost.blocked_task);
+			p->ghost.blocked_task = true;
 
-	if (sleeping) {
-		WARN_ON_ONCE(p->ghost.blocked_task);
-		p->ghost.blocked_task = true;
-
-		/*
-		 * Return to local agent if it has expressed interest in
-		 * this edge.
-		 *
-		 * We don't need the full resched_curr() functionality here
-		 * because this must be followed by pick_next_task().
-		 */
-		if (rq->ghost.run_flags & RTLA_ON_BLOCKED)
-			schedule_agent(rq, false);
+			/*
+			 * Return to local agent if it has expressed interest in
+			 * this edge.
+			 *
+			 * We don't need the full resched_curr() functionality
+			 * here because this must be followed by
+			 * pick_next_task().
+			 */
+			if (rq->ghost.run_flags & RTLA_ON_BLOCKED)
+				schedule_agent(rq, false);
+		}
 	}
 }
 
@@ -1157,7 +1160,7 @@ static bool ghost_produce_prev_msgs(struct rq *rq, struct task_struct *prev)
 	if (!task_has_ghost_policy(prev))
 		return false;
 
-	/* Who watches the watchmen? */
+	/* Agent block and wakeup messages are handled elsewhere */
 	if (prev == rq->ghost.agent)
 		return false;
 
@@ -1622,6 +1625,19 @@ static void _task_woken_ghost(struct rq *rq, struct task_struct *p)
 		return;
 
 	ghost_sw_set_flag(sw, GHOST_SW_TASK_RUNNABLE);
+
+	if (is_agent(rq, p)) {
+		cpu_deliver_msg_agent_wakeup(rq);
+		/*
+		 * Note that we do not return here.  Similar to
+		 * _switched_to_ghost(), we may call ghost_task_new() on an
+		 * agent task, which eventually calls __update_curr_ghost() and
+		 * does a little accounting.  Arguably we can scrap that.
+		 *
+		 * The rest of this function (deliver wakeup and wake agent) are
+		 * noops for an agent task.
+		 */
+	}
 
 	if (unlikely(p->ghost.new_task)) {
 		p->ghost.new_task = false;
@@ -3890,6 +3906,14 @@ static inline int __produce_for_task(struct task_struct *p,
 		payload = &msg->cpu_busy;
 		payload_size = sizeof(msg->cpu_busy);
 		break;
+	case MSG_CPU_AGENT_BLOCKED:
+		payload = &msg->agent_blocked;
+		payload_size = sizeof(msg->agent_blocked);
+		break;
+	case MSG_CPU_AGENT_WAKEUP:
+		payload = &msg->agent_wakeup;
+		payload_size = sizeof(msg->agent_wakeup);
+		break;
 	default:
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
@@ -3988,6 +4012,38 @@ static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq)
 	return !produce_for_agent(rq, msg);
 }
 
+static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq)
+{
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_agent_blocked *payload = &msg->agent_blocked;
+
+	if (cpu_skip_message(rq))
+		return false;
+	if (!__check_cpu_enclave_bool(cpu_of(rq), deliver_agent_runnability))
+		return false;
+
+	msg->type = MSG_CPU_AGENT_BLOCKED;
+	payload->cpu = cpu_of(rq);
+
+	return !produce_for_agent(rq, msg);
+}
+
+static inline bool cpu_deliver_msg_agent_wakeup(struct rq *rq)
+{
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_agent_wakeup *payload = &msg->agent_wakeup;
+
+	if (cpu_skip_message(rq))
+		return false;
+	if (!__check_cpu_enclave_bool(cpu_of(rq), deliver_agent_runnability))
+		return false;
+
+	msg->type = MSG_CPU_AGENT_WAKEUP;
+	payload->cpu = cpu_of(rq);
+
+	return !produce_for_agent(rq, msg);
+}
+
 /* Returns true if MSG_CPU_TIMER_EXPIRED was produced and false otherwise */
 static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t type,
 					     uint64_t cookie)
@@ -4060,9 +4116,7 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 
 	/*
 	 * Ignore the agent's task_state changes.
-	 *
-	 * If the agent is not runnable then how do we tell it that
-	 * it's not runnable.
+	 * Agent block and wakeup messages are handled elsewhere.
 	 */
 	if (unlikely(is_agent(rq, p)))
 		return -1;
@@ -6971,6 +7025,38 @@ static struct kernfs_ops gf_ops_e_ctl = {
 	.ioctl			= gf_ctl_ioctl,
 };
 
+static int gf_deliver_agent_runnability_show(struct seq_file *sf, void *v)
+{
+	struct ghost_enclave *e = seq_to_e(sf);
+
+	seq_printf(sf, "%d", READ_ONCE(e->deliver_agent_runnability));
+	return 0;
+}
+
+static ssize_t gf_deliver_agent_runnability_write(struct kernfs_open_file *of,
+						  char *buf, size_t len,
+						  loff_t off)
+{
+	struct ghost_enclave *e = of_to_e(of);
+	int err;
+	int tunable;
+
+	err = kstrtoint(buf, 0, &tunable);
+	if (err)
+		return -EINVAL;
+
+	WRITE_ONCE(e->deliver_agent_runnability, !!tunable);
+
+	return len;
+}
+
+static struct kernfs_ops gf_ops_e_deliver_agent_runnability = {
+	.open			= gf_e_open,
+	.release		= gf_e_release,
+	.seq_show		= gf_deliver_agent_runnability_show,
+	.write			= gf_deliver_agent_runnability_write,
+};
+
 static int gf_deliver_cpu_availability_show(struct seq_file *sf, void *v)
 {
 	struct ghost_enclave *e = seq_to_e(sf);
@@ -7352,6 +7438,11 @@ static struct gf_dirent enclave_dirtab[] = {
 		.name		= "ctl",
 		.mode		= 0664,
 		.ops		= &gf_ops_e_ctl,
+	},
+	{
+		.name		= "deliver_agent_runnability",
+		.mode		= 0664,
+		.ops		= &gf_ops_e_deliver_agent_runnability,
 	},
 	{
 		.name		= "deliver_cpu_availability",
