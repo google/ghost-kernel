@@ -19,6 +19,7 @@
 #include <linux/atomic.h>
 #include <linux/kvm_host.h>
 #include <linux/moduleparam.h>
+#include <linux/cpuset.h>
 #include <uapi/linux/sched/types.h>
 #include <linux/file.h>
 #ifdef CONFIG_X86_64
@@ -6788,10 +6789,11 @@ static void destroy_enclave(struct kernfs_open_file *ctl_of)
 	ghost_destroy_enclave(e);
 }
 
-static int ctl_become_agent(struct kernfs_open_file *of, int qfd)
+static int ctl_become_agent(struct kernfs_open_file *of, int cpu, int qfd)
 {
 	struct ghost_enclave *e = of_to_e(of);
 	struct ghost_enclave *old_target;
+	cpumask_var_t cpuset_mask, new_mask;
 	int ret;
 	struct sched_param param = {
 		.sched_priority = qfd,
@@ -6804,10 +6806,61 @@ static int ctl_become_agent(struct kernfs_open_file *of, int qfd)
 	if (qfd < -1)
 		return -EBADF;
 
+	if (cpu < 0 || cpu >= nr_cpu_ids)
+		return -EINVAL;
+
+	if (!alloc_cpumask_var(&cpuset_mask, GFP_KERNEL))
+		return -ENOMEM;
+
+	if (!zalloc_cpumask_var(&new_mask, GFP_KERNEL)) {
+		free_cpumask_var(cpuset_mask);
+		return -ENOMEM;
+	}
+
+	/*
+	 * We could verify that 'cpu' is a member of 'e->cpus' but that
+	 * could change immediately after we drop 'e->lock'. Therefore
+	 * we defer this check to ghost_prep_agent() that does it with
+	 * both 'task_rq_lock(current)' and 'e->lock' held.
+	 *
+	 * We do this in the kernel (compared to calling sched_setaffinity
+	 * from the agent) to step around any cpuset cgroup constraints.
+	 */
+	cpumask_set_cpu(cpu, new_mask);
+	ret = ghost_set_cpus_allowed(current, new_mask);
+	if (ret)
+		goto done;
+
 	old_target = set_target_enclave(e);
 	ret = sched_setscheduler(current, SCHED_GHOST | SCHED_RESET_ON_FORK,
 				 &param);
 	restore_target_enclave(old_target);
+	if (ret == 0) {
+		/* Success */
+	} else if (ret != -EBUSY || e->agent_online) {
+		/*
+		 * Something went wrong so restore the cpumask from its cpuset.
+		 *
+		 * N.B. there is still a race possible between getting cpuset
+		 * mask and setting it since we don't hold cpuset_mutex or
+		 * task_rq_lock. In practice this doesn't matter since the
+		 * agent code will CHECK fail for any error except EBUSY.
+		 */
+		cpuset_cpus_allowed(current, cpuset_mask);
+		WARN_ON_ONCE(ghost_set_cpus_allowed(current, cpuset_mask));
+	} else {
+		/*
+		 * EBUSY in conjunction with !e->agent_online indicates
+		 * that an agent handoff is in progress (the old agent
+		 * hasn't died yet but it will soon enough). This is an
+		 * expected "error" so no need to restore cpus_allowed
+		 * in this case.
+		 */
+	}
+done:
+	free_cpumask_var(cpuset_mask);
+	free_cpumask_var(new_mask);
+
 	return ret;
 }
 
@@ -6924,7 +6977,7 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 			    size_t len, loff_t off)
 {
 	unsigned int arg1, arg2;
-	int err, qfd;
+	int cpu, err, qfd;
 
 	/*
 	 * Ignore the offset for ctl commands, so userspace doesn't have to
@@ -6941,8 +6994,8 @@ static ssize_t gf_ctl_write(struct kernfs_open_file *of, char *buf,
 		err = create_sw_region(of, arg1, arg2);
 		if (err)
 			return err;
-	} else if (sscanf(buf, "become agent %d", &qfd) == 1) {
-		err = ctl_become_agent(of, qfd);
+	} else if (sscanf(buf, "become agent %d %d", &cpu, &qfd) == 2) {
+		err = ctl_become_agent(of, cpu, qfd);
 		if (err)
 			return err;
 	} else if (!strcmp(buf, "disable my bpf_prog_load")) {

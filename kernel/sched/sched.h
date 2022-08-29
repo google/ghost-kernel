@@ -2358,6 +2358,7 @@ void ghost_switchto(struct rq *rq, struct task_struct *prev,
 
 /* ghost functions in core.c */
 void ghost_agent_schedule(void);
+int ghost_set_cpus_allowed(struct task_struct *p, const struct cpumask *mask);
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 static inline bool sched_stop_runnable(struct rq *rq)

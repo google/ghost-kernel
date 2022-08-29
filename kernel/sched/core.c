@@ -5409,7 +5409,13 @@ void ghost_agent_schedule(void)
 	 */
 	VM_BUG_ON(this_rq()->cpu != cpu);
 }
-#endif
+
+int ghost_set_cpus_allowed(struct task_struct *p, const struct cpumask *mask)
+{
+	return __set_cpus_allowed_ptr(p, mask, true);
+}
+
+#endif/* CONFIG_SCHED_CLASS_GHOST */
 
 /*
  * synchronize_rcu_tasks() makes sure that no task is stuck in preempted
