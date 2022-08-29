@@ -6466,8 +6466,12 @@ static int gf_e_open(struct kernfs_open_file *of)
 	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
 	 * scenario.  agent's should open files from CFS.
 	 */
-	if (!READ_ONCE(e->live_dangerously))
-		WARN_ON_ONCE(is_agent(task_rq(current), current));
+	if (!READ_ONCE(e->live_dangerously) &&
+	    is_agent(task_rq(current), current)) {
+		pr_err("Agent pid %d opened a file - potential deadlock!",
+		       current->pid);
+		return -EDEADLK;
+	}
 
 	kref_get(&e->kref);
 	return 0;
