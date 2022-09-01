@@ -106,6 +106,7 @@ struct ghost_rq {
 	struct task_struct *agent;	/* protected by e->lock and rq->lock */
 	uint32_t agent_barrier;
 	bool blocked_in_run;		/* agent is blocked in 'ghost_run()' */
+	bool agent_on_rq;		/* agent is on_rq */
 	bool agent_should_wake;		/* racy reads and writes */
 	uint64_t prev_resched_seq;	/* racy, cpu_seqnum to resched */
 	bool must_resched;		/* rq->curr must reschedule in PNT */
@@ -2541,24 +2542,21 @@ static inline int __ghost_extra_nr_running(struct rq *rq)
 	int agent_active = 0;
 
 	/*
-	 * If a blocked ghost agent becomes runnable (blocked_in_run == false)
-	 * when idle_balance() has dropped the rq->lock, it's possible that the
-	 * Idle load balancer pulls CFS tasks which run before the agent gets a
-	 * chance. In order to intercept this path and let the agent begin an
-	 * inter-agent handoff before losing its CPU, we leave the agent's
-	 * contribution in rq->nr_running. This causes the CFS pick_next_task to
-	 * trigger a re-entry to the global pick_next_task loop, from where we
-	 * can return back to the agent to initiate handoff.
+	 * Normal ghost tasks or a 'blocked_in_run' agent are treated as
+	 * "extra" tasks and effectively hidden from a load balancing
+	 * perspective.
 	 *
-	 * ghost_nr_running and rq->nr_running account for the agent + other
-	 * ghost threads. Keep the agent accounted for in rq->nr_running, only
-	 * while it is actively scheduling.
+	 * However an agent that is !blocked_in_run is considered to be
+	 * actively scheduling and its contribution is not deducted from
+	 * 'rq->nr_running'.
+	 *
+	 * N.B. 'rq' may not be locked so it is not safe to access fields
+	 * from the underlying agent task since it could have died and the
+	 * underlying memory freed (e.g. this would appear as a kernel #PF
+	 * with CONFIG_DEBUG_PAGEALLOC=y).
 	 */
-	if (rq->ghost.agent) {
-		if (task_on_rq_queued(rq->ghost.agent) &&
-		    !rq->ghost.blocked_in_run)
-			agent_active = 1;
-	}
+	if (READ_ONCE(rq->ghost.agent_on_rq))
+		agent_active = !READ_ONCE(rq->ghost.blocked_in_run);
 
 	return rq->ghost.ghost_nr_running - agent_active;
 #else

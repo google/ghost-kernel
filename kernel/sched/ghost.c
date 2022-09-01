@@ -730,8 +730,11 @@ static void _dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	if (!spurious)
 		invalidate_cached_tasks(rq, p);
 
-	if (is_agent(rq, p))
+	if (is_agent(rq, p)) {
 		WARN_ON_ONCE(rq->ghost.blocked_in_run && !spurious);
+		WARN_ON_ONCE(!rq->ghost.agent_on_rq);
+		rq->ghost.agent_on_rq = false;
+	}
 
 	if (sleeping) {
 		WARN_ON_ONCE(!(sw->flags & GHOST_SW_TASK_RUNNABLE));
@@ -765,6 +768,8 @@ static void _put_prev_task_ghost(struct rq *rq, struct task_struct *p)
 static void
 _enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 {
+	const bool spurious = flags & ENQUEUE_RESTORE;
+
 	add_nr_running(rq, 1);
 	rq->ghost.ghost_nr_running++;
 
@@ -772,8 +777,10 @@ _enqueue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	list_add_tail(&p->ghost.run_list, &rq->ghost.tasks);
 	p->ghost.last_runnable_at = ktime_get();
 
-	if (flags & ENQUEUE_WAKEUP) {
-		WARN_ON_ONCE(is_agent(rq, p) && rq->ghost.blocked_in_run);
+	if (is_agent(rq, p)) {
+		WARN_ON_ONCE(rq->ghost.blocked_in_run && !spurious);
+		WARN_ON_ONCE(rq->ghost.agent_on_rq);
+		rq->ghost.agent_on_rq = true;
 	}
 }
 
@@ -1069,6 +1076,7 @@ static inline struct task_struct *pick_agent(struct rq *rq)
 	if (!agent->on_rq)
 		return NULL;
 	BUG_ON(!on_ghost_rq(rq, agent));
+	BUG_ON(!rq->ghost.agent_on_rq);
 
 	/*
 	 * 'agent' is on_rq so 'ghost_nr_running' must be at least 1.
@@ -1243,8 +1251,10 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 	 * just bail out now.  The preemption case below is an optimization in
 	 * case we end up poking the agent, which we can't do.
 	 */
-	if (!agent->on_rq)
+	if (!agent->on_rq) {
+		BUG_ON(rq->ghost.agent_on_rq);
 		return NULL;
+	}
 
 	/*
 	 * Evaluate after produce_prev_msgs() in case it wakes up the local
