@@ -7528,7 +7528,8 @@ static ssize_t gf_tasks_write(struct kernfs_open_file *of, char *buf,
 
 	old_target = set_target_enclave(e);
 	ret = sched_setscheduler(t, SCHED_GHOST, &param);
-	if (ret == 0)
+	/* EALREADY: the task is already in this enclave. */
+	if (ret == 0 || ret == -EALREADY)
 		ret = len;
 	restore_target_enclave(old_target);
 

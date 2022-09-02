@@ -532,10 +532,14 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		 *   This prevents forked child processes from inheriting the
 		 *   priority of their parent agent process. ghOSt tasks are
 		 *   allowed to modify this flag based on their needs.
-		 * - We expect this path to be taken when the user calls
-		 *   setattr syscall to change priority/flags. This path should
-		 *   not be taken if the function is called from any of the
-		 *   ghostfs functions.
+		 * - This path is taken both from ghost fs and when the user
+		 *   calls the setattr syscall to change priority/flags.
+		 *   Ghostfs calls will have the target enclave set.  Ghostfs
+		 *   calls only change the sched class.  But in this
+		 *   "oldpolicy == newpolicy == ghost" case, we do not change
+		 *   the sched class (or the enclave within the ghost class) and
+		 *   only return errors: EALREADY for an idempotent join, or
+		 *   EPERM for an attempt to change enclaves.
 		 * While the following operations are safe:
 		 * - ghOSt tasks trying to change their priority via
 		 *   `sched_nice`. This field can only be set from
@@ -549,8 +553,12 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		if (p->ghost.agent && !*reset_on_fork)
 			return -EPERM;
 
-		if (get_target_enclave())
+		e = get_target_enclave();
+		if (e) {
+			if (e == p->ghost.enclave)
+				return -EALREADY;
 			return -EPERM;
+		}
 
 		return 0;
 	} else if (ghost_policy(oldpolicy)) {
