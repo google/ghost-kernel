@@ -68,6 +68,8 @@ static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
 				     bool latched_preempt);
 static bool cpu_deliver_msg_tick(struct rq *rq);
+static inline bool cpu_deliver_msg_cpu_available(struct rq *rq);
+static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq);
 static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq);
 static inline bool cpu_deliver_msg_agent_wakeup(struct rq *rq);
 static int task_target_cpu(struct task_struct *p);
@@ -166,6 +168,32 @@ static bool cpu_is_available(struct rq *rq)
 	 * priority than ghost.
 	 */
 	return !(rq_adj_nr_running(rq) - agent_active > 0);
+}
+
+/*
+ * Handle changes in cpu availability, e.g. update the status_word or send
+ * messages.  If there is no change since the last time, do nothing.
+ */
+static void handle_cpu_availability(struct rq *rq, bool is_available)
+{
+	struct ghost_status_word *agent_sw;
+
+	lockdep_assert_held(&rq->lock);
+
+	if (!rq->ghost.agent)
+		return;
+	agent_sw = rq->ghost.agent->ghost.status_word;
+
+	if (is_available != per_cpu(cpu_available, cpu_of(rq))) {
+		if (is_available) {
+			ghost_sw_set_flag(agent_sw, GHOST_SW_CPU_AVAIL);
+			cpu_deliver_msg_cpu_available(rq);
+		} else {
+			ghost_sw_clear_flag(agent_sw, GHOST_SW_CPU_AVAIL);
+			cpu_deliver_msg_cpu_busy(rq);
+		}
+		per_cpu(cpu_available, cpu_of(rq)) = is_available;
+	}
 }
 
 #ifdef CONFIG_BPF
@@ -7823,34 +7851,18 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev,
 static void prepare_task_switch(struct rq *rq, struct task_struct *prev,
 				struct task_struct *next)
 {
-	struct ghost_status_word *agent_sw;
+	/*
+	 * XXX pick_next_task_fair() can return 'rq->idle' via
+	 * core_tag_pick_next_matching_rendezvous().
+	 */
+	bool is_available = task_has_ghost_policy(next) || next == rq->idle;
 
-	if (rq->ghost.agent) {
+	handle_cpu_availability(rq, is_available);
 
-		bool is_available = task_has_ghost_policy(next) ||
-				    next == rq->idle;
-
-		/*
-		 * XXX pick_next_task_fair() can return 'rq->idle' via
-		 * core_tag_pick_next_matching_rendezvous().
-		 */
-		agent_sw = rq->ghost.agent->ghost.status_word;
-		if (!is_available) {
-			ghost_sw_clear_flag(agent_sw, GHOST_SW_CPU_AVAIL);
-			if (rq->ghost.run_flags & NEED_CPU_NOT_IDLE) {
-				rq->ghost.run_flags &= ~NEED_CPU_NOT_IDLE;
-				ghost_need_cpu_not_idle(rq, next);
-			}
-		} else {
-			ghost_sw_set_flag(agent_sw, GHOST_SW_CPU_AVAIL);
-		}
-		if (is_available != per_cpu(cpu_available, cpu_of(rq))) {
-			if (is_available)
-				cpu_deliver_msg_cpu_available(rq);
-			else
-				cpu_deliver_msg_cpu_busy(rq);
-			per_cpu(cpu_available, cpu_of(rq)) = is_available;
-		}
+	if (rq->ghost.agent && !is_available &&
+	    (rq->ghost.run_flags & NEED_CPU_NOT_IDLE)) {
+		rq->ghost.run_flags &= ~NEED_CPU_NOT_IDLE;
+		ghost_need_cpu_not_idle(rq, next);
 	}
 
 	if (!task_has_ghost_policy(prev))
