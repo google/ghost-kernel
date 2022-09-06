@@ -151,6 +151,23 @@ static inline bool enclave_is_reapable(struct ghost_enclave *e)
 	return false;
 }
 
+static bool cpu_is_available(struct rq *rq)
+{
+	int agent_active = rq->ghost.agent_on_rq && !rq->ghost.blocked_in_run;
+
+	lockdep_assert_held(&rq->lock);
+
+	/*
+	 * rq_adj_nr_running() includes the active agent.  Any adj_nr_running
+	 * not including the agent means the cpu isn't available: CFS or a
+	 * higher class has priority.  i.e. > 0 means "not available".
+	 *
+	 * Note that this assumes other classes, e.g. microq, are higher
+	 * priority than ghost.
+	 */
+	return !(rq_adj_nr_running(rq) - agent_active > 0);
+}
+
 #ifdef CONFIG_BPF
 #include <linux/filter.h>
 
@@ -175,8 +192,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 
 	ctx->agent_on_rq = agent && agent->on_rq;
 	ctx->agent_runnable = ctx->agent_on_rq && !rq->ghost.blocked_in_run;
-
-	ctx->might_yield = rq_adj_nr_running(rq) > 0;
+	ctx->might_yield = !cpu_is_available(rq);
 	ctx->dont_idle = false;
 
 	if (rq->ghost.latched_task) {
