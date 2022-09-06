@@ -7836,9 +7836,17 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev,
 	if (READ_ONCE(rq->ghost.prev_resched_seq) == rq->ghost.cpu_seqnum)
 		rq->ghost.must_resched = true;
 
+	/*
+	 * A CFS task might have just gotten off cpu.  BPF agents benefit from
+	 * getting MSG_CPU_AVAILABLE as soon as possible - particularly before
+	 * BPF-PNT.  Otherwise, it's asked to pick a task on a CPU it didn't
+	 * know was available.
+	 */
+	handle_cpu_availability(rq, cpu_is_available(rq));
+
 	rcu_read_lock();
 	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
-	/* If there is a BPF program, this will unlock the RQ */
+	/* If there is a BPF-PNT program, this will unlock the RQ */
 	if (e)
 		ghost_bpf_pnt(e, rq, prev, rf);
 	rcu_read_unlock();
