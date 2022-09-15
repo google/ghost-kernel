@@ -8009,6 +8009,8 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 {
 	int this_cpu = smp_processor_id();
 	struct rq *rq;
+	struct task_struct *curr;
+	const struct sched_class *curr_class;
 	struct ghost_enclave *this_enclave = get_target_enclave();
 
 	if (cpu < 0)
@@ -8018,13 +8020,32 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 	if (WARN_ON_ONCE(!this_enclave))
 		return -EXDEV;
 
-	/* RCU protects the allocation of cpu to the enclave */
+	/*
+	 * RCU protects the allocation of cpu to the enclave and the existence
+	 * of rq->curr.
+	 */
 	rcu_read_lock();
 	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
 		rcu_read_unlock();
 		return -EXDEV;
 	}
 	rq = cpu_rq(cpu);
+	curr = rcu_dereference(rq->curr);
+	/*
+	 * Lockless read of curr->sched_class!  It's possible that curr is in
+	 * setscheduler, changing their class, and we could read a partial
+	 * write, which would be a nonsense pointer.  Don't dereference the
+	 * pointer.  Worst case here is that we falsely think we can IPI the
+	 * cpu, which is OK once in a while.  The alternative is to change all
+	 * core.c sched_class assignments to WRITE_ONCE.
+	 */
+	curr_class = curr->sched_class;
+	/* TODO(REBASE): use sched_class_above() in newer kernels */
+	if (!(curr_class == &ghost_sched_class ||
+	      curr_class == &idle_sched_class)) {
+		rcu_read_unlock();
+		return -EPERM;
+	}
 	WRITE_ONCE(rq->ghost.prev_resched_seq, cpu_seqnum);
 	if (cpu == this_cpu) {
 		set_tsk_need_resched(current);
