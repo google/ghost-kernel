@@ -229,15 +229,13 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 
 	rcu_read_unlock();
 
-	if (ctx->dont_idle) {
-		/*
-		 * The next time this rq selects the idle task, it will bail out
-		 * of do_idle() quickly.  Since we unlocked the RQ lock, it's
-		 * possible that this rq will pick something other than the idle
-		 * task, which is fine.
-		 */
-		rq->ghost.dont_idle_once = true;
-	}
+	/*
+	 * The next time this rq selects the idle task, it will bail out
+	 * of do_idle() quickly.  Since we unlocked the RQ lock, it's
+	 * possible that this rq will pick something other than the idle
+	 * task, which is fine.  Next time we run BPF-PNT, we'll reset it.
+	 */
+	rq->ghost.dont_idle_once = ctx->dont_idle;
 }
 
 /*
