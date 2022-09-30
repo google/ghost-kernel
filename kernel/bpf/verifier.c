@@ -12017,6 +12017,22 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
 	env->allow_ptr_to_map_access = bpf_allow_ptr_to_map_access();
 	env->bypass_spec_v1 = bpf_bypass_spec_v1();
 	env->bypass_spec_v4 = bpf_bypass_spec_v4();
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	/*
+	 * Ghost agents are trusted w.r.t. speculative execution.  e.g.
+	 * pti_disable() in ghost.c.  You can't do an add on a ctx pointer
+	 * without this, which BPF-MSG handlers might do.
+	 */
+	switch ((*prog)->type) {
+	case BPF_PROG_TYPE_GHOST_SCHED:
+	case BPF_PROG_TYPE_GHOST_MSG:
+		env->bypass_spec_v1 = true;
+		env->bypass_spec_v4 = true;
+		break;
+	default:
+		break;
+	}
+#endif
 	env->bpf_capable = bpf_capable();
 
 	if (is_priv)
