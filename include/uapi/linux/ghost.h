@@ -31,7 +31,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	74
+#define GHOST_VERSION	75
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -281,6 +281,7 @@ enum {
 	MSG_TASK_SWITCHTO,
 	MSG_TASK_AFFINITY_CHANGED,
 	MSG_TASK_LATCHED,
+	MSG_TASK_PRIORITY_CHANGED,
 
 	/* cpu messages */
 	MSG_CPU_TICK		= _MSG_CPU_FIRST,
@@ -297,6 +298,7 @@ struct ghost_msg_payload_task_new {
 	uint64_t gtid;
 	uint64_t runtime;	/* cumulative runtime in ns */
 	uint16_t runnable;
+	int nice;		/* task priority in nice value [-20, 19]. */
 	struct ghost_sw_info sw_info;
 };
 
@@ -341,6 +343,11 @@ struct ghost_msg_payload_task_departed {
 
 struct ghost_msg_payload_task_affinity_changed {
 	uint64_t gtid;
+};
+
+struct ghost_msg_payload_task_priority_changed {
+	uint64_t gtid;
+	int nice;	/* task priority in nice value [-20, 19]. */
 };
 
 struct ghost_msg_payload_task_wakeup {
@@ -420,6 +427,7 @@ struct bpf_ghost_msg {
 		struct ghost_msg_payload_task_departed	departed;
 		struct ghost_msg_payload_task_switchto	switchto;
 		struct ghost_msg_payload_task_affinity_changed	affinity;
+		struct ghost_msg_payload_task_priority_changed	priority;
 		struct ghost_msg_payload_task_latched	latched;
 		struct ghost_msg_payload_cpu_tick	cpu_tick;
 		struct ghost_msg_payload_timer		timer;

@@ -520,6 +520,53 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 	if (WARN_ON_ONCE(!ghost_policy(oldpolicy) && !ghost_policy(newpolicy)))
 		return -EINVAL;
 
+	if (ghost_policy(oldpolicy) && WARN_ON_ONCE(!p->ghost.enclave))
+		return -EINVAL;
+
+	if (ghost_policy(oldpolicy) && ghost_policy(newpolicy)) {
+		/*
+		 * We are changing some task attributes in this case (staying
+		 * inside ghOSt scheduler). There are some ghOSt attributes
+		 * that cannot be changed here.
+		 * - An ghOSt agent should not clear `SCHED_RESET_ON_FORK` flag.
+		 *   This prevents forked child processes from inheriting the
+		 *   priority of their parent agent process. ghOSt tasks are
+		 *   allowed to modify this flag based on their needs.
+		 * - We expect this path to be taken when the user calls
+		 *   setattr syscall to change priority/flags. This path should
+		 *   not be taken if the function is called from any of the
+		 *   ghostfs functions.
+		 * While the following operations are safe:
+		 * - ghOSt tasks trying to change their priority via
+		 *   `sched_nice`. This field can only be set from
+		 *   sched_setattr - it cannot be set via sched_setscheduler and
+		 *   sched_setparam syscalls because they take sched_param as
+		 *   the argument and it does not have sched_nice. sched_param
+		 *   has sched_priority field, but it must be zero for normal
+		 *   (non-RT) tasks and SCHED_GHOST is currently following
+		 *   that convention.
+		 */
+		if (p->ghost.agent && !*reset_on_fork)
+			return -EPERM;
+
+		if (get_target_enclave())
+			return -EPERM;
+
+		return 0;
+	} else if (ghost_policy(oldpolicy)) {
+		e = p->ghost.enclave;
+		WARN_ON_ONCE(!e);
+	} else {
+		/*
+		 * Entering ghOSt should always be through ghostfs, not from
+		 * native sys_sched_setscheduler/sys_sched_setattr. In those
+		 * cases, target enclave will not be set.
+		 */
+		e = get_target_enclave();
+		if (!e)
+			return -EBADF;
+	}
+
 	/*
 	 * If the process is dying, finish_task_switch will call task_dead
 	 * *after* releasing the rq lock.  We don't know if task_dead was called
@@ -533,21 +580,6 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 	 */
 	if (p->state == TASK_DEAD)
 		return -ESRCH;
-
-	/* Cannot change attributes for a ghost task after creation. */
-	if (oldpolicy == newpolicy)
-		return -EPERM;
-
-	if (ghost_policy(oldpolicy)) {
-		e = p->ghost.enclave;
-		WARN_ON_ONCE(!e);
-	} else {
-		e = get_target_enclave();
-	}
-
-	/* Callers from sys_sched_setscheduler will not have e set. */
-	if (!e)
-		return -EBADF;
 
 	return e->abi->setscheduler(e, p, rq, attr, reset_on_fork);
 }

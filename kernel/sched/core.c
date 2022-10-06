@@ -5962,8 +5962,7 @@ static void __setscheduler_params(struct task_struct *p,
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	if (ghost_policy(policy)) {
 		p->rt_priority = 0;
-		p->normal_prio = normal_prio(p);
-		set_load_weight(p, true);
+		p->static_prio = NICE_TO_PRIO(attr->sched_nice);
 		return;
 	}
 #endif

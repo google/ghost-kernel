@@ -63,6 +63,8 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 				      bool runnable);
 static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p);
+static void task_deliver_msg_priority_changed(struct rq *rq,
+					      struct task_struct *p);
 static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
@@ -654,9 +656,7 @@ static void _update_curr_ghost(struct rq *rq)
 
 static void _prio_changed_ghost(struct rq *rq, struct task_struct *p, int old)
 {
-	/*
-	 * XXX produce MSG_TASK_PRIO_CHANGE into p->ghost.dst_q.
-	 */
+	task_deliver_msg_priority_changed(rq, p);
 	ghost_wake_agent_of(p);
 
 	/*
@@ -3952,6 +3952,10 @@ static inline int __produce_for_task(struct task_struct *p,
 		payload = &msg->affinity;
 		payload_size = sizeof(msg->affinity);
 		break;
+	case MSG_TASK_PRIORITY_CHANGED:
+		payload = &msg->priority;
+		payload_size = sizeof(msg->priority);
+		break;
 	case MSG_TASK_LATCHED:
 		payload = &msg->latched;
 		payload_size = sizeof(msg->latched);
@@ -4242,6 +4246,7 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 	payload->gtid = gtid(p);
 	payload->runnable = runnable;
 	payload->runtime = p->se.sum_exec_runtime;
+	payload->nice = PRIO_TO_NICE(p->static_prio);
 	if (_get_sw_info(p->ghost.enclave, p->ghost.status_word,
 			 &payload->sw_info)) {
 		WARN(1, "New task PID %d didn't have a status word!", p->pid);
@@ -4378,6 +4383,26 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 
 	msg->type = MSG_TASK_AFFINITY_CHANGED;
 	payload->gtid = gtid(p);
+
+	produce_for_task(p, msg);
+}
+
+static void task_deliver_msg_priority_changed(struct rq *rq,
+					      struct task_struct *p)
+{
+	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct ghost_msg_payload_task_priority_changed *payload =
+		&msg->priority;
+
+	if (unlikely(p->ghost.new_task))
+		return;
+
+	if (__task_deliver_common(rq, p))
+		return;
+
+	msg->type = MSG_TASK_PRIORITY_CHANGED;
+	payload->gtid = gtid(p);
+	payload->nice = PRIO_TO_NICE(p->static_prio);
 
 	produce_for_task(p, msg);
 }
