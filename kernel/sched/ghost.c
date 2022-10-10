@@ -1339,6 +1339,11 @@ static struct task_struct *pick_next_ghost_agent(struct rq *rq)
 			ghost_wake_agent_of(prev);
 			force_offcpu(rq, false);
 			rq->ghost.check_prev_preemption = false;
+			/*
+			 * Barrier updated; resync to avoid a spurious
+			 * AGENT_STALE
+			 */
+			(void) agent_barrier_get(agent);
 		}
 
 		/*
