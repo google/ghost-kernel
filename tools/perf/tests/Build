@@ -60,7 +60,6 @@ perf-y += api-io.o
 perf-y += demangle-java-test.o
 perf-y += pfm.o
 perf-y += parse-metric.o
-perf-y += pe-file-parsing.o
 perf-y += expand-cgroup.o
 perf-y += perf-time-to-tsc.o
 
