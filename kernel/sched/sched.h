@@ -243,8 +243,12 @@ static inline void sched_ghost_entity_init(struct task_struct *p)
 	INIT_LIST_HEAD(&p->ghost.task_list);
 }
 
+bool ghost_task_active(int cpu);
+
 #else
 static inline unsigned long ghost_cfs_added_load(struct rq *rq) { return 0; }
+
+static inline bool ghost_task_active(int cpu) { return false; }
 #endif	/* CONFIG_SCHED_CLASS_GHOST */
 
 struct callback_head *splice_balance_callbacks(struct rq *rq);

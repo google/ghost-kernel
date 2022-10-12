@@ -667,6 +667,30 @@ out:
 	return 0;
 }
 
+/* Returns true if a ghost thread is attempting to use the given cpu. */
+bool ghost_task_active(int cpu)
+{
+	struct rq *rq = cpu_rq(cpu);
+	struct task_struct *curr;
+	bool ret = false;
+
+	if (__ghost_extra_nr_running(rq) != rq->ghost.ghost_nr_running)
+		return true;
+
+	if (rq->ghost.latched_task)
+		return true;
+
+	rcu_read_lock();
+	curr = READ_ONCE(rq->curr);
+	if (task_has_ghost_policy(curr) &&
+	    curr->state == TASK_RUNNING &&
+	    !rq->ghost.must_resched)
+		ret = true;
+	rcu_read_unlock();
+
+	return ret;
+}
+
 int64_t ghost_alloc_gtid(struct task_struct *p)
 {
 	gtid_t gtid;
