@@ -102,6 +102,8 @@ extern void call_trace_sched_update_nr_running(struct rq *rq, int count);
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
 
+DECLARE_STATIC_KEY_FALSE(ghost_active);
+
 struct ghost_rq {
 	struct task_struct *agent;	/* protected by e->lock and rq->lock */
 	uint32_t agent_barrier;

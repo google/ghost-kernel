@@ -3,6 +3,9 @@
 #define _GHOST_MAYBE_CONST
 #include "sched.h"
 
+/* Tracking for whether ghost is active at all. */
+DEFINE_STATIC_KEY_FALSE(ghost_active);
+
 /* The load contribution that CFS sees for a running ghOSt task */
 unsigned long sysctl_ghost_cfs_load_added = 1024;
 
@@ -124,6 +127,8 @@ static int make_enclave(struct kernfs_node *parent, unsigned long id,
 	}
 
 	WARN_ON_ONCE(e->abi != abi);
+
+	static_branch_inc(&ghost_active);
 
 	/*
 	 * Once the enclave has been activated, it is available to userspace and
@@ -620,11 +625,15 @@ void ghost_cpu_idle(void)
 
 unsigned long ghost_cfs_added_load(struct rq *rq)
 {
-	int ghost_nr_running = rq->ghost.ghost_nr_running;
+	int ghost_nr_running;
 	struct task_struct *curr;
 	bool add_load = false;
 
+	if (!static_branch_likely(&ghost_active))
+		return 0;
+
 	/* No ghost tasks; nothing to contribute load. */
+	ghost_nr_running = rq->ghost.ghost_nr_running;
 	if (!ghost_nr_running)
 		return 0;
 
@@ -821,7 +830,12 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 void ghost_commit_greedy_txn(void)
 {
 	struct ghost_enclave *e;
-	int cpu = get_cpu();
+	int cpu;
+
+	if (!static_branch_likely(&ghost_active))
+		return;
+
+	cpu = get_cpu();
 
 	VM_BUG_ON(preemptible());
 

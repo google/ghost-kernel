@@ -1449,6 +1449,9 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 	if (!agent)
 		return NULL;
 
+	/* Sanity check that we didn't mess up the static branch. */
+	WARN_ON_ONCE(!static_branch_likely(&ghost_active));
+
 	if (rq->ghost.latched_task) {
 		uint32_t barrier;
 
@@ -1970,6 +1973,8 @@ static void enclave_actual_release(struct work_struct *w)
 
 	kfree(e->cpu_data);
 	kfree(e);
+
+	static_branch_dec(&ghost_active);
 }
 
 static void enclave_release(struct kref *k)
