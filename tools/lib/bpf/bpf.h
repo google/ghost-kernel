@@ -23,6 +23,7 @@
 #ifndef __LIBBPF_BPF_H
 #define __LIBBPF_BPF_H
 
+#include <linux/version.h>
 #include <linux/bpf.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -241,7 +242,11 @@ LIBBPF_API int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf,
 				 __u32 *buf_len, __u32 *prog_id, __u32 *fd_type,
 				 __u64 *probe_offset, __u64 *probe_addr);
 
+#if defined(__cplusplus) && __cplusplus >= 201103L && LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)
+enum bpf_stats_type: int; /* C++ compilers need a size */
+#else
 enum bpf_stats_type; /* defined in up-to-date linux/bpf.h */
+#endif
 LIBBPF_API int bpf_enable_stats(enum bpf_stats_type type);
 
 struct bpf_prog_bind_opts {
