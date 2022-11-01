@@ -128,8 +128,6 @@ static int make_enclave(struct kernfs_node *parent, unsigned long id,
 
 	WARN_ON_ONCE(e->abi != abi);
 
-	static_branch_inc(&ghost_active);
-
 	/*
 	 * Once the enclave has been activated, it is available to userspace and
 	 * can be used for scheduling.  After that, we must destroy it by

@@ -7797,6 +7797,10 @@ static struct ghost_enclave *create_enclave(const struct ghost_abi *abi,
 		return ERR_PTR(-ENOMEM);
 	}
 
+	/* After this point, the enclave will be kref_put(). */
+
+	static_branch_inc(&ghost_active);
+
 	for_each_possible_cpu(cpu) {
 		e->cpu_data[cpu] = vmalloc_user_node_flags(PAGE_SIZE,
 							   cpu_to_node(cpu),
