@@ -1808,7 +1808,7 @@ static int ghost_cpu_data_mmap(struct file *file, struct vm_area_struct *vma,
 	for (uaddr = vma->vm_start; uaddr < vma->vm_end; uaddr += PAGE_SIZE) {
 		error = remap_vmalloc_range_partial(vma, uaddr, *cpu_data++,
 							0, PAGE_SIZE);
-		if (WARN_ON_ONCE(error)) {
+		if (error) {
 			/*
 			 * do_mmap() will cleanup the partially populated VMA.
 			 */
@@ -2359,7 +2359,7 @@ static int enclave_for_each_task(struct ghost_enclave *e,
 	/* Don't hold e->lock during f(), since f() may grab the rq lock. */
 	for_each = kcalloc(e->nr_tasks, sizeof(struct task_struct *),
 			   GFP_ATOMIC);
-	if (WARN_ON_ONCE(!for_each)) {
+	if (!for_each) {
 		spin_unlock_irqrestore(&e->lock, irq_fl);
 		return -ENOMEM;
 	}
@@ -3877,8 +3877,8 @@ static int _produce(struct ghost_queue *q, uint32_t barrier, int type,
 	spin_lock_irqsave(&q->lock, flags);
 
 	avail = ring_avail_slots(ring, nelems);
-	if (WARN_ON_ONCE(avail.ahead < slots_needed &&
-			 avail.behind < slots_needed)) {
+	if (avail.ahead < slots_needed && avail.behind < slots_needed) {
+		pr_notice_once("ghost: queue overflow, messages lost");
 		ring->overflow++;
 		spin_unlock_irqrestore(&q->lock, flags);
 		return -EOVERFLOW;
@@ -6589,21 +6589,29 @@ static struct ghost_enclave *seq_to_e(struct seq_file *sf)
 	return of_to_e(of);
 }
 
-/* For enclave files whose priv directly points to a ghost enclave. */
-static int gf_e_open(struct kernfs_open_file *of)
+/* Returns true if the agent is opening a file without living dangerously. */
+static bool live_dangerously_open_error(struct ghost_enclave *e)
 {
-	struct ghost_enclave *e = of_to_e(of);
-
 	/*
 	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
 	 * scenario.  agent's should open files from CFS.
 	 */
 	if (!READ_ONCE(e->live_dangerously) &&
 	    is_agent(task_rq(current), current)) {
-		pr_err("Agent pid %d opened a file - potential deadlock!",
-		       current->pid);
-		return -EDEADLK;
+		pr_notice("ghost: agent pid %d opened a file - potential deadlock!",
+			  current->pid);
+		return true;
 	}
+	return false;
+}
+
+/* For enclave files whose priv directly points to a ghost enclave. */
+static int gf_e_open(struct kernfs_open_file *of)
+{
+	struct ghost_enclave *e = of_to_e(of);
+
+	if (live_dangerously_open_error(e))
+		return -EDEADLK;
 
 	kref_get(&e->kref);
 	return 0;
@@ -6968,7 +6976,8 @@ static int ctl_become_agent(struct kernfs_open_file *of, int cpu, int qfd)
 		 * agent code will CHECK fail for any error except EBUSY.
 		 */
 		cpuset_cpus_allowed(current, cpuset_mask);
-		WARN_ON_ONCE(ghost_set_cpus_allowed(current, cpuset_mask));
+		if (ghost_set_cpus_allowed(current, cpuset_mask))
+			pr_notice_once("ghost: could not restore the cpuset_mask");
 	} else {
 		/*
 		 * EBUSY in conjunction with !e->agent_online indicates
@@ -6998,11 +7007,8 @@ static int gf_swr_open(struct kernfs_open_file *of)
 {
 	struct ghost_sw_region *swr = of_to_swr(of);
 
-	/*
-	 * kernfs open can grab kernfs_mutex, which is a potential deadlock
-	 * scenario.  agent's should open files from CFS.
-	 */
-	WARN_ON_ONCE(is_agent(task_rq(current), current));
+	if (live_dangerously_open_error(swr->enclave))
+		return -EDEADLK;
 
 	kref_get(&swr->enclave->kref);
 	return 0;
