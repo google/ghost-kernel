@@ -12019,15 +12019,20 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
 	env->bypass_spec_v4 = bpf_bypass_spec_v4();
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	/*
-	 * Ghost agents are trusted w.r.t. speculative execution.  e.g.
-	 * pti_disable() in ghost.c.  You can't do an add on a ctx pointer
-	 * without this, which BPF-MSG handlers might do.
+	 * Ghost agents are lightly-trusted w.r.t. speculative execution and
+	 * information disclosure.  e.g.  pti_disable() in ghost.c.
+	 *
+	 * You can't do an add on a ctx pointer without bypass_spec, or pointer
+	 * arithmetic, even within a map, without allow_ptr_leaks.
 	 */
 	switch ((*prog)->type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
 	case BPF_PROG_TYPE_GHOST_MSG:
 		env->bypass_spec_v1 = true;
 		env->bypass_spec_v4 = true;
+		env->allow_ptr_leaks = true;
+		env->allow_uninit_stack = true;
+		env->allow_ptr_to_map_access = true;
 		break;
 	default:
 		break;
