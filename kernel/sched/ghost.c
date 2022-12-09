@@ -4248,12 +4248,19 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
 	struct ghost_msg_payload_task_new *payload = &msg->newt;
+	struct task_struct *parent;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
 	msg->type = MSG_TASK_NEW;
 	payload->gtid = gtid(p);
+
+	rcu_read_lock();
+	parent = rcu_dereference(p->real_parent);
+	payload->parent_gtid = parent ? gtid(parent) : 0;
+	rcu_read_unlock();
+
 	payload->runnable = runnable;
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->nice = PRIO_TO_NICE(p->static_prio);
