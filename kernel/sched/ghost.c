@@ -44,6 +44,70 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
  */
 static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
 
+/*
+ * Used from bpf helpers to determine our caller's state, e.g. "are we in
+ * bpf-pnt?  if so, what are the rq flags?".
+ *
+ * prog_type says which BPF attach point we were called from.  Based on the
+ * type, the union has the specific variables of interest.
+ *
+ * Note that we could store the enclave in the prog_state, instead of using
+ * {set,get}_target_enclave().  However, the target_enclave is used by
+ * ghost_core.c, and the specific contents of the prog_state may end up being
+ * ABI-dependent.
+ */
+struct ghost_bpf_prog_state {
+	int depth;
+	int prog_type;
+	union {
+		struct {
+		} bpf_pnt;
+		struct {
+		} bpf_msg;
+	};
+};
+static DEFINE_PER_CPU(struct ghost_bpf_prog_state, __ghost_bpf_prog_state);
+
+/*
+ * Get a pointer to the current bpf prog state.  If you're in a BPF helper, call
+ * this to get the state set by your program's call site.  If you're calling the
+ * BPF program, call this after save_prog_state.
+ */
+static struct ghost_bpf_prog_state *get_prog_state(void)
+{
+	return this_cpu_ptr(&__ghost_bpf_prog_state);
+}
+
+/*
+ * Save the existing bpf prog state so that you can use it for your own program.
+ * Call this before calling your BPF program, and call restore_prog_state()
+ * after BPF returns.
+ */
+static void save_prog_state(struct ghost_bpf_prog_state *old_state)
+{
+	struct ghost_bpf_prog_state *ps = get_prog_state();
+
+	/*
+	 * depth is an optimization to avoid copying on the first call, though
+	 * it might not be worth the branch.
+	 */
+	if (ps->depth > 0)
+		*old_state = *ps;
+	ps->depth++;
+}
+
+/*
+ * Restore the old bpf prog state.  Call this after your BPF program returned.
+ */
+static void restore_prog_state(struct ghost_bpf_prog_state *old_state)
+{
+	struct ghost_bpf_prog_state *ps = get_prog_state();
+
+	ps->depth--;
+	if (ps->depth > 0)
+		*ps = *old_state;
+}
+
 /* Track whether or not this cpu is available to ghost */
 static DEFINE_PER_CPU(bool, cpu_available);
 
@@ -206,6 +270,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	struct task_struct *agent = rq->ghost.agent;
 	struct bpf_ghost_sched_kern ctx[1];
 	struct bpf_prog *prog;
+	struct ghost_bpf_prog_state old_state, *ps;
 	struct ghost_enclave *old_target;
 
 	lockdep_assert_held(&rq->lock);
@@ -244,9 +309,11 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	raw_spin_unlock(&rq->lock);
 
 	old_target = set_target_enclave(e);
-	rq->ghost.in_pnt_bpf = true;
+	save_prog_state(&old_state);
+	ps = get_prog_state();
+	ps->prog_type = BPF_PROG_TYPE_GHOST_SCHED;
 	BPF_PROG_RUN(prog, ctx);
-	rq->ghost.in_pnt_bpf = false;
+	restore_prog_state(&old_state);
 	restore_target_enclave(old_target);
 
 	raw_spin_lock(&rq->lock);
@@ -272,6 +339,7 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 			       struct bpf_ghost_msg *msg)
 {
 	struct bpf_prog *prog;
+	struct ghost_bpf_prog_state old_state, *ps;
 	struct ghost_enclave *old_target;
 	bool send;
 
@@ -283,7 +351,11 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 	}
 	/* Program returns 0 if they want us to send the message. */
 	old_target = set_target_enclave(e);
+	save_prog_state(&old_state);
+	ps = get_prog_state();
+	ps->prog_type = BPF_PROG_TYPE_GHOST_MSG;
 	send = BPF_PROG_RUN(prog, msg) == 0;
+	restore_prog_state(&old_state);
 	restore_target_enclave(old_target);
 	rcu_read_unlock();
 	return send;
@@ -5248,6 +5320,7 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	int ret = 0;
 	struct task_struct *next;
 	struct ghost_enclave *this_enclave = get_target_enclave();
+	struct ghost_bpf_prog_state *ps = get_prog_state();
 
 	const int supported_flags = RTLA_ON_PREEMPT	|
 				    RTLA_ON_BLOCKED	|
@@ -5316,13 +5389,9 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	 * If the RQ is in the middle of PNT (where it briefly unlocks),
 	 * ghost_can_schedule() is not accurate.  rq->curr is still the
 	 * task that is scheduling, and it may be from CFS.
-	 *
-	 * This does not mean that our thread is in PNT.  It's possible that we
-	 * are a wakeup BPF program and the PNT thread has unlocked the RQ and
-	 * is running its own BPF program.  Either way, PNT will check for a
-	 * latched task or for a higher priority task when it relocks.
 	 */
-	if (!rq->ghost.in_pnt_bpf && !ghost_can_schedule(rq, gtid)) {
+	if (ps->prog_type != BPF_PROG_TYPE_GHOST_SCHED
+	    && !ghost_can_schedule(rq, gtid)) {
 		ret = -ENOSPC;
 		goto out_unlock;
 	}

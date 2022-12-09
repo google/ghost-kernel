@@ -116,7 +116,7 @@ struct ghost_rq {
 	bool ignore_prev_preemption;
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
 	bool skip_latched_preemption;
-	bool in_pnt_bpf;		/* running BPF at PNT */
+	bool in_pnt_bpf;		/* DEPRECATED: ABI 75 and older */
 	bool dont_idle_once;		/* Don't idle next time rq->idle runs */
 	int ghost_nr_running;
 	int run_flags;			/* flags passed to 'ghost_run()' */
