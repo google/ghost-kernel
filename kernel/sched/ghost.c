@@ -61,6 +61,7 @@ struct ghost_bpf_prog_state {
 	int prog_type;
 	union {
 		struct {
+			struct rq_flags *rf;
 		} bpf_pnt;
 		struct {
 		} bpf_msg;
@@ -300,24 +301,15 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 		ctx->next_gtid = 0;
 	}
 
-	/*
-	 * BPF programs attached here may call ghost_run_gtid(), which requires
-	 * that we not hold any RQ locks.  We are called from
-	 * pick_next_task_ghost where it is safe to unlock the RQ.
-	 */
-	rq_unpin_lock(rq, rf);
-	raw_spin_unlock(&rq->lock);
-
 	old_target = set_target_enclave(e);
 	save_prog_state(&old_state);
 	ps = get_prog_state();
 	ps->prog_type = BPF_PROG_TYPE_GHOST_SCHED;
+	/* ghost_run_gtid() may unlock the RQ lock. */
+	ps->bpf_pnt.rf = rf;
 	BPF_PROG_RUN(prog, ctx);
 	restore_prog_state(&old_state);
 	restore_target_enclave(old_target);
-
-	raw_spin_lock(&rq->lock);
-	rq_repin_lock(rq, rf);
 
 	rcu_read_unlock();
 
@@ -5312,15 +5304,18 @@ done:
 	return error;
 }
 
-static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
-			       int cpu)
+static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 {
-	struct rq_flags rf;
-	struct rq *rq;
 	int ret = 0;
 	struct task_struct *next;
 	struct ghost_enclave *this_enclave = get_target_enclave();
 	struct ghost_bpf_prog_state *ps = get_prog_state();
+	int cpu = smp_processor_id();
+	struct rq *this_rq = this_rq();
+	struct rq_flags *this_rf = ps->bpf_pnt.rf;
+	struct rq *next_rq;
+	struct rq_flags next_rf[1] = {0};
+	bool kept_this_rq_locked;
 
 	const int supported_flags = RTLA_ON_PREEMPT	|
 				    RTLA_ON_BLOCKED	|
@@ -5332,11 +5327,6 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 				    0;
 
 	WARN_ON_ONCE(preemptible());
-
-	if (cpu < 0)
-		return -EINVAL;
-	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
-		return -ERANGE;
 
 	if (!run_flags_valid(run_flags, supported_flags, gtid))
 		return -EINVAL;
@@ -5357,30 +5347,117 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 		rcu_read_unlock();
 		return -ENOENT;
 	}
-	rq = task_rq_lock(next, &rf);
 
-	ret = validate_next_task(rq, next, task_barrier, /*state=*/ NULL);
+	/*
+	 * We already hold this cpu's RQ lock.  If next is already here,
+	 * checking the RQ is a valid check.  i.e. we hold the lock that
+	 * protects next being on this rq.  And if not, next->cpu is already
+	 * protected by READ_ONCE, so it's a safe read.
+	 *
+	 * Ultimately, we want next->pi_lock and next's RQ lock.  The lock
+	 * ordering is PI -> RQ.  We can try to get next's PI.  If we fail, just
+	 * unlock and relock everything.
+	 */
+	kept_this_rq_locked = false;
+	if (task_rq(next) == this_rq &&
+	    raw_spin_trylock_irqsave(&next->pi_lock, next_rf->flags)) {
+		if (task_on_rq_migrating(next)) {
+			raw_spin_unlock_irqrestore(&next->pi_lock,
+						   next_rf->flags);
+		} else {
+			unsigned long next_irq_flags;
+
+			kept_this_rq_locked = true;
+
+			BUG_ON(task_rq(next) != this_rq);
+			next_rq = this_rq;
+
+			/*
+			 * We have next_rq and next's pi_lock, and next is on
+			 * this_rq.  The rq pin is still in this_rf, and the irq
+			 * flags are in next_rf.
+			 *
+			 * Copy the pin from this_rf to next_rf, so that
+			 * ghost_move_task() below is passed the pin cookie (and
+			 * clock_update_flags) corresponding to the lock.
+			 */
+			next_irq_flags = next_rf->flags;
+			*next_rf = *this_rf;
+			next_rf->flags = next_irq_flags;
+		}
+	}
+	if (!kept_this_rq_locked) {
+		rq_unlock(this_rq, this_rf);
+
+		next_rq = task_rq_lock(next, next_rf);
+		/*
+		 * Whenever you task_rq_lock from within __schedule / PNT,
+		 * update the rq clock again.  CFS does this in
+		 * PNT->idle_balance()->load_balance().  Presumably someone
+		 * could have snuck in and set RQCF_REQ_SKIP (skip the next
+		 * update), which is only handled at the *top* of __schedule.
+		 *
+		 * Especially if next_rq == this_rq.  Note that when
+		 * you rq_pin, that clears the RQCF_UPDATED flag from the rq.
+		 * We could have had this_rq marked RQCF_UPDATED, but then
+		 * unlocked and relocked, and now that flag is gone.  Had we
+		 * done an unpin + repin, that flag would have been restored.
+		 *
+		 * Note that ghost_move_task will update_rq_clock too, if
+		 * we're doing an actual migration (i.e. next_rq != this_rq).
+		 * So you could be tempted to skip the update here, but there
+		 * are a few error cases where we bail out early.  So just play
+		 * it safe and update the clock.
+		 */
+		update_rq_clock(next_rq);
+
+		/*
+		 * We have next's RQ lock and pi.  next_rq could still be
+		 * this_rq, either due to a migration or failing the PI trylock.
+		 * The rq pin is in next_rf, and the irq flags (from
+		 * task_rq_lock) are in next_rf.
+		 */
+	}
+
+	lockdep_assert_held(&next_rq->lock);
+	lockdep_assert_held(&next->pi_lock);
+
+	ret = validate_next_task(next_rq, next, task_barrier, /*state=*/ NULL);
+
 	if (ret)
 		goto out_unlock;
 
-	if (task_running(rq, next)) {
+	if (task_running(next_rq, next)) {
 		ret = -EBUSY;
 		goto out_unlock;
 	}
 
-	rq = ghost_move_task(rq, next, cpu, &rf);
+	/*
+	 * Note that next_rq may change.  It may have been some other cpu's RQ
+	 * lock, and it could have been this_rq.  After ghost_move_task(), it
+	 * will be this_rq: we moved the task to this cpu.  We will eventually
+	 * unlock next's pi_lock, but never this_rq: we must return to BPF with
+	 * this_rq (aka next_rq)'s lock held on success.
+	 *
+	 * BPF relies on the invariant that once the task was latched, we return
+	 * to BPF with next_rq == this_rq's lock still held, which allows the
+	 * BPF agent to synchronize with the message stream.
+	 */
+	next_rq = ghost_move_task(next_rq, next, cpu, next_rf);
+	BUG_ON(next_rq != this_rq);
 
 	/*
 	 * Must not latch a task if there is no agent, otherwise PNT will never
 	 * see it.  (Latched tasks are cleared when the agent exits).
 	 */
-	if (unlikely(!rq->ghost.agent)) {
+	if (unlikely(!next_rq->ghost.agent)) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
 
 	if ((run_flags & DO_NOT_PREEMPT) &&
-	    (task_has_ghost_policy(rq->curr) || rq->ghost.latched_task)) {
+	    (task_has_ghost_policy(next_rq->curr) ||
+	     next_rq->ghost.latched_task)) {
 		ret = -ESTALE;
 		goto out_unlock;
 	}
@@ -5391,16 +5468,75 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 	 * task that is scheduling, and it may be from CFS.
 	 */
 	if (ps->prog_type != BPF_PROG_TYPE_GHOST_SCHED
-	    && !ghost_can_schedule(rq, gtid)) {
+	    && !ghost_can_schedule(next_rq, gtid)) {
 		ret = -ENOSPC;
 		goto out_unlock;
 	}
 
-	ghost_set_pnt_state(rq, next, run_flags);
+	ghost_set_pnt_state(next_rq, next, run_flags);
 	ret = 0;
 
+	/* fall-through */
+
 out_unlock:
-	task_rq_unlock(rq, next, &rf);
+	if (next_rq != this_rq) {
+		/*
+		 * We didn't move next to this cpu.  (Note the BUG_ON after
+		 * ghost_move_task()).  We hold next_pi, next_rq, and pinned
+		 * next_rf, but need to hold this_rq and pin this_rf.
+		 */
+		task_rq_unlock(next_rq, next, next_rf);
+
+		rq_relock(this_rq, this_rf);
+	} else {
+		/*
+		 * We either moved next to this cpu, or it was already here.
+		 * Either way, we hold the rq lock (this_rq == next_rq) and
+		 * next_pi.  The guarantee to BPF is that we will not drop the
+		 * rq lock, so we unlock PI, but not this_rq.
+		 */
+		raw_spin_unlock_irqrestore(&next->pi_lock, next_rf->flags);
+		if (!kept_this_rq_locked) {
+			/*
+			 * We unlocked and unpinned this_rf at some point.  Then
+			 * later we called task_rq_lock (which may have locked
+			 * this_rq if the task migrated while we unlocked), and
+			 * ghost_move_task which traded the next_rq lock for
+			 * this_rq (and assigned it to next_rq).
+			 *
+			 * In both cases, we hold this_rq's lock, but the pin is
+			 * in next_rf.  When we return, the pin needs to be in
+			 * this_rf, which our caller will use to rq_unlock().
+			 * The rule is that if we pass an RQ with an RF to a
+			 * function, then the RQ is locked, and RF's pin cookie
+			 * corresponds to the lock acquisition.
+			 *
+			 * Additionally, we're sort of doing the equivalent of
+			 * an rq_unpin_lock + rq_repin_lock here.  Regarding
+			 * clock_update_flags, unpin alone doesn't do much.  It
+			 * saves a bit if the rq was marked 'updated'.  Only
+			 * when we repin does that saved bit get ORed into the
+			 * rq->clock_update_flags.  For us, next_rf might have
+			 * an update bit set (> RQCF_ACT_SKIP), and if so, we
+			 * want to carry that back to this_rf.  In testing, I
+			 * only ever saw this_rQ with RQCF_UPDATED and next_rf
+			 * with 0, but that wasn't exhaustive.
+			 *
+			 * Note that we already used next_rf->flags (irq_flags).
+			 * Don't copy them back to this_rf either.  We need to
+			 * make sure this_rf's flags are maintained (even though
+			 * __schedule() manually disabled irqs).
+			 */
+			this_rf->cookie = next_rf->cookie;
+#ifdef CONFIG_SCHED_DEBUG
+			this_rf->clock_update_flags |=
+				next_rf->clock_update_flags;
+#endif
+		}
+	}
+
+	lockdep_assert_held(&this_rq->lock);
+
 	rcu_read_unlock();
 
 	return ret;
@@ -7967,7 +8103,7 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev,
 
 	rcu_read_lock();
 	e = rcu_dereference(per_cpu(enclave, cpu_of(rq)));
-	/* If there is a BPF-PNT program, this will unlock the RQ */
+	/* If there is a BPF-PNT program, this may unlock the RQ */
 	if (e)
 		ghost_bpf_pnt(e, rq, prev, rf);
 	rcu_read_unlock();
@@ -8116,14 +8252,15 @@ static int bpf_wake_agent(int cpu)
 }
 
 /*
- * Attempts to run gtid on cpu.  Returns 0 or -error.
+ * Attempts to run gtid on this cpu, ignoring the ABI cpu argument.
+ * Returns 0 or -error.
  *
  * Called from BPF helpers.  The programs that can call those helpers are
  * explicitly allowed in ghost_sched_func_proto.
  */
 static int bpf_run_gtid(s64 gtid, u32 task_barrier, int run_flags, int cpu)
 {
-	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu);
+	return __ghost_run_gtid(gtid, task_barrier, run_flags);
 }
 
 static int bpf_resched_cpu2(int cpu, int flags)
