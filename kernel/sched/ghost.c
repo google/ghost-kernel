@@ -67,8 +67,7 @@ static void task_deliver_msg_priority_changed(struct rq *rq,
 					      struct task_struct *p);
 static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
-static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
-				     bool latched_preempt);
+static void task_deliver_msg_on_cpu(struct rq *rq, struct task_struct *p);
 static bool cpu_deliver_msg_tick(struct rq *rq);
 static inline bool cpu_deliver_msg_cpu_available(struct rq *rq);
 static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq);
@@ -1241,14 +1240,14 @@ static void ghost_latched_task_preempted(struct rq *rq)
 	WARN_ON_ONCE(!rq->ghost.agent);
 
 	if (task_has_ghost_policy(latched)) {
-		/*
-		 * Normally, TASK_LATCHED is not sent until we context switch to
-		 * the task.  The agent is expecting this message before
-		 * TASK_PREEMPT.
-		 */
-		if (rq->ghost.run_flags & SEND_TASK_LATCHED) {
-			task_deliver_msg_latched(rq, latched, true);
-			rq->ghost.run_flags &= ~SEND_TASK_LATCHED;
+		if (rq->ghost.run_flags & SEND_TASK_ON_CPU) {
+			/*
+			 * We used to send task_latched here, but the agent
+			 * doesn't need it.  task_preempted conveys this info
+			 * via was_latched.  The agent also can track the task's
+			 * state on its own and know it was latched.
+			 */
+			rq->ghost.run_flags &= ~SEND_TASK_ON_CPU;
 		}
 		_ghost_task_preempted(rq, latched, true);
 		ghost_wake_agent_of(latched);
@@ -3962,13 +3961,13 @@ static inline int __produce_for_task(struct task_struct *p,
 		payload = &msg->affinity;
 		payload_size = sizeof(msg->affinity);
 		break;
+	case MSG_TASK_ON_CPU:
+		payload = &msg->on_cpu;
+		payload_size = sizeof(msg->on_cpu);
+		break;
 	case MSG_TASK_PRIORITY_CHANGED:
 		payload = &msg->priority;
 		payload_size = sizeof(msg->priority);
-		break;
-	case MSG_TASK_LATCHED:
-		payload = &msg->latched;
-		payload_size = sizeof(msg->latched);
 		break;
 	case MSG_CPU_TICK:
 		payload = &msg->cpu_tick;
@@ -4424,21 +4423,19 @@ static void task_deliver_msg_priority_changed(struct rq *rq,
 	produce_for_task(p, msg);
 }
 
-static void task_deliver_msg_latched(struct rq *rq, struct task_struct *p,
-				     bool latched_preempt)
+static void task_deliver_msg_on_cpu(struct rq *rq, struct task_struct *p)
 {
 	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
-	struct ghost_msg_payload_task_latched *payload = &msg->latched;
+	struct ghost_msg_payload_task_on_cpu *payload = &msg->on_cpu;
 
 	if (__task_deliver_common(rq, p))
 		return;
 
-	msg->type = MSG_TASK_LATCHED;
+	msg->type = MSG_TASK_ON_CPU;
 	payload->gtid = gtid(p);
 	payload->commit_time = ktime_get_ns();
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
-	payload->latched_preempt = latched_preempt;
 
 	produce_for_task(p, msg);
 }
@@ -4760,7 +4757,7 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
 
 	/*
 	 * Even though we don't send a message, this is a change in cpu state.
-	 * When we later send TASK_LATCHED, that will increment again.
+	 * When we later send TASK_ON_CPU, that will increment again.
 	 */
 	rq->ghost.cpu_seqnum++;
 }
@@ -4900,14 +4897,14 @@ static void ghost_task_got_oncpu(struct rq *rq, struct task_struct *p)
 	VM_BUG_ON(task_rq(p) != rq);
 
 	/*
-	 * We must defer sending TASK_LATCHED until any prev ghost tasks got off
+	 * We must defer sending TASK_ON_CPU until any prev ghost tasks got off
 	 * cpu.  Otherwise the agent will have a hard time reconciling the
 	 * current cpu state.
 	 */
-	if (rq->ghost.run_flags & SEND_TASK_LATCHED) {
-		task_deliver_msg_latched(rq, p, false);
+	if (rq->ghost.run_flags & SEND_TASK_ON_CPU) {
+		task_deliver_msg_on_cpu(rq, p);
 		/* Do not send the message more than once per commit. */
-		rq->ghost.run_flags &= ~SEND_TASK_LATCHED;
+		rq->ghost.run_flags &= ~SEND_TASK_ON_CPU;
 	}
 }
 
@@ -5258,7 +5255,7 @@ static int __ghost_run_gtid_on(gtid_t gtid, u32 task_barrier, int run_flags,
 				    RTLA_ON_YIELD	|
 				    NEED_L1D_FLUSH	|
 				    ELIDE_PREEMPT	|
-				    SEND_TASK_LATCHED	|
+				    SEND_TASK_ON_CPU	|
 				    DO_NOT_PREEMPT	|
 				    0;
 
@@ -5557,7 +5554,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 					NEED_L1D_FLUSH	|
 					ELIDE_PREEMPT	|
 					NEED_CPU_NOT_IDLE |
-					SEND_TASK_LATCHED |
+					SEND_TASK_ON_CPU |
 					DEFER_LATCHED_PREEMPTION_BY_AGENT |
 					DO_NOT_PREEMPT	|
 					0;
@@ -7885,7 +7882,7 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev,
 	/*
 	 * Lockless way to set must_resched, which kicks prev off cpu.  The
 	 * agent knows the cpu_seqnum from the last message it received, e.g.
-	 * the TASK_LATCHED when prev started to run.
+	 * the TASK_ON_CPU when prev started to run.
 	 */
 	if (READ_ONCE(rq->ghost.prev_resched_seq) == rq->ghost.cpu_seqnum)
 		rq->ghost.must_resched = true;
