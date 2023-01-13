@@ -3733,6 +3733,13 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	p->inhibit_task_msgs = 0;
 	INIT_LIST_HEAD(&p->inhibited_task_list);
+	/*
+	 * If we are forking into a new process (i.e. not CLONE_THREAD), then
+	 * we'll become our own group leader later on in the process of forking,
+	 * so we taint ourselves in case we become a group leader.  (The check
+	 * in bpf_prog_load() is on the group_leader, not on current.)
+	 */
+	p->bpf_cannot_load_prog = current->group_leader->bpf_cannot_load_prog;
 	sched_ghost_entity_init(p);
 #endif
 

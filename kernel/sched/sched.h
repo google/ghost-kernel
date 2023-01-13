@@ -222,25 +222,13 @@ struct ghost_enclave {
 
 static inline void sched_ghost_entity_init(struct task_struct *p)
 {
-	bool prog_load_disabled;
-
 	/*
-	 * If we are forking into a new process (i.e. not CLONE_THREAD), then
-	 * we'll become our own group leader later on in the process of forking,
-	 * so we taint ourselves in case we become a group leader.  (The check
-	 * in bpf_prog_load() is on the group_leader, not on current.)
-	 *
-	 * Note that a task can exit and rejoin ghost, at which point we run
-	 * this sched_ghost_entity_init() again, and p could be
-	 * current->group_leader.
-	 *
-	 *
-	 * Saving/restoring 'disable' here also covers us in case a group leader
-	 * leaves and rejoins ghost in an attempt to clear 'disable'.
+	 * Note that dst_q, status_word, and enclave could be not NULL here.  If
+	 * our parent was in ghost, we'll get a copy (unrefcounted) of all the
+	 * stuff in their sched_ghost_entity.  Clear them here, and the child
+	 * will get their own set later.
 	 */
-	prog_load_disabled = current->group_leader->ghost.bpf_cannot_load_prog;
 	memset(&p->ghost, 0, sizeof(p->ghost));
-	p->ghost.bpf_cannot_load_prog = prog_load_disabled;
 	INIT_LIST_HEAD(&p->ghost.run_list);
 	INIT_LIST_HEAD(&p->ghost.task_list);
 }

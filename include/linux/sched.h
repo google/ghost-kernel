@@ -612,8 +612,6 @@ struct sched_ghost_entity {
 	uint new_task			: 1;
 	uint agent			: 1;
 
-	bool bpf_cannot_load_prog;
-
 	/*
 	 * Locking of 'twi' is awkward:
 	 * 1. wake_up_new_task: both select_task_rq() and task_woken_ghost()
@@ -783,6 +781,7 @@ struct task_struct {
 	int64_t gtid;			/* ghost tid */
 	uint inhibit_task_msgs;		/* don't produce msgs for this task */
 	struct list_head inhibited_task_list;
+	bool bpf_cannot_load_prog;
 	struct sched_ghost_entity ghost;
 #endif
 #ifdef CONFIG_CGROUP_SCHED
