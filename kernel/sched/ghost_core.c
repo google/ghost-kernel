@@ -359,20 +359,20 @@ DEFINE_PER_CPU_READ_MOSTLY(struct ghost_enclave *, enclave);
 
 struct ghost_enclave *get_target_enclave(void)
 {
-	return current->ghost.__target_enclave;
+	return current->__target_enclave;
 }
 
 struct ghost_enclave *set_target_enclave(struct ghost_enclave *e)
 {
-	struct ghost_enclave *old = current->ghost.__target_enclave;
+	struct ghost_enclave *old = current->__target_enclave;
 
-	current->ghost.__target_enclave = e;
+	current->__target_enclave = e;
 	return old;
 }
 
 void restore_target_enclave(struct ghost_enclave *old)
 {
-	current->ghost.__target_enclave = old;
+	current->__target_enclave = old;
 }
 
 /* Caller holds e->lock.  Either all cpus are added, or none are. */

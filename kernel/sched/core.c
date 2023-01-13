@@ -3740,6 +3740,11 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	 * in bpf_prog_load() is on the group_leader, not on current.)
 	 */
 	p->bpf_cannot_load_prog = current->group_leader->bpf_cannot_load_prog;
+	/*
+	 * __target_enclave should only be set while current's cpu is doing a
+	 * ghost-bpf operation, not during a fork.
+	 */
+	WARN_ON_ONCE(p->__target_enclave);
 	sched_ghost_entity_init(p);
 #endif
 
