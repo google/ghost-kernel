@@ -110,7 +110,8 @@ struct ghost_rq {
 	bool blocked_in_run;		/* agent is blocked in 'ghost_run()' */
 	bool agent_on_rq;		/* agent is on_rq */
 	bool agent_should_wake;		/* racy reads and writes */
-	uint64_t prev_resched_seq;	/* racy, cpu_seqnum to resched */
+	uint64_t prev_resched_seq;	/* racy, cpu_seqnum to resched. DEPRECATED as of ABI 79. */
+	bool set_must_resched;		/* whether to force must_resched at reschedule */
 	bool must_resched;		/* rq->curr must reschedule in PNT */
 	bool ignore_prev_preemption;
 	bool check_prev_preemption;	/* see 'ghost_prepare_task_switch()' */
@@ -2224,7 +2225,8 @@ struct ghost_abi {
 	void (*timerfd_triggered)(int cpu, uint64_t type, uint64_t cookie);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
-	int (*bpf_resched_cpu)(int cpu, u64 cpu_seqnum);
+	int (*bpf_resched_cpu)(int cpu, u64 seqnum); /* DEPRECATED as of ABI 79. */
+	int (*bpf_resched_cpu2)(int cpu, int flags);
 	bool (*ghost_sched_is_valid_access)(int off, int size,
 					    enum bpf_access_type type,
 					    const struct bpf_prog *prog,

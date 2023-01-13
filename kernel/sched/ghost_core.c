@@ -783,6 +783,7 @@ void init_ghost_rq(struct ghost_rq *ghost_rq)
 	INIT_LIST_HEAD(&ghost_rq->tasks);
 	INIT_LIST_HEAD(&ghost_rq->enclave_work);
 	WRITE_ONCE(ghost_rq->prev_resched_seq, ~0ULL);
+	WRITE_ONCE(ghost_rq->set_must_resched, false);
 }
 
 int ghost_sched_fork(struct task_struct *p)
@@ -1273,6 +1274,7 @@ static const struct bpf_func_proto bpf_ghost_run_gtid_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+/* DEPRECATED AS OF ABI 79 */
 BPF_CALL_2(bpf_ghost_resched_cpu, u32, cpu, u64, cpu_seqnum)
 {
 	struct ghost_enclave *e;
@@ -1287,11 +1289,42 @@ BPF_CALL_2(bpf_ghost_resched_cpu, u32, cpu, u64, cpu_seqnum)
 	if (WARN_ON_ONCE(!e))
 		return -ENODEV;
 
+	if (!e->abi->bpf_resched_cpu)
+		return -ENOSYS;
+
 	return e->abi->bpf_resched_cpu(cpu, cpu_seqnum);
 }
 
 static const struct bpf_func_proto bpf_ghost_resched_cpu_proto = {
 	.func		= bpf_ghost_resched_cpu,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_ghost_resched_cpu2, u32, cpu, int, flags)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	BUILD_BUG_ON(BPF_FUNC_ghost_resched_cpu2 != 3003);
+
+	e = get_target_enclave();
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	if (!e->abi->bpf_resched_cpu2)
+		return -ENOSYS;
+
+	return e->abi->bpf_resched_cpu2(cpu, flags);
+}
+
+static const struct bpf_func_proto bpf_ghost_resched_cpu2_proto = {
+	.func		= bpf_ghost_resched_cpu2,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_ANYTHING,
@@ -1316,6 +1349,8 @@ ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		}
 	case BPF_FUNC_ghost_resched_cpu:
 		return &bpf_ghost_resched_cpu_proto;
+	case BPF_FUNC_ghost_resched_cpu2:
+		return &bpf_ghost_resched_cpu2_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -1351,6 +1386,8 @@ ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_ghost_wake_agent_proto;
 	case BPF_FUNC_ghost_resched_cpu:
 		return &bpf_ghost_resched_cpu_proto;
+	case BPF_FUNC_ghost_resched_cpu2:
+		return &bpf_ghost_resched_cpu2_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

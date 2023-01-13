@@ -4619,12 +4619,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		rq->ghost.run_flags = 0;
 		WRITE_ONCE(rq->ghost.agent_barrier, 0);
 		p->ghost.agent = false;
-		VM_BUG_ON(rq->ghost.blocked_in_run);
-		/*
-		 * In case the user left some value that the next enclave could
-		 * hit.
-		 */
-		WRITE_ONCE(rq->ghost.prev_resched_seq, ~0ULL);
+		WRITE_ONCE(rq->ghost.set_must_resched, false);
 
 		/*
 		 * Clean up any pending transactions.  We need to do this here,
@@ -4770,8 +4765,10 @@ static void ghost_set_pnt_state(struct rq *rq, struct task_struct *p,
  * If it was blocked_in_run, clear it and reschedule, which ensures it wakes up.
  *
  * Caller must ensure 'cpu' is valid.
+ *
+ * Returns true if this also causes a rescheduler on `cpu`.
  */
-static void __ghost_wake_agent_on(int cpu)
+static bool __ghost_wake_agent_on(int cpu)
 {
 	struct rq *dst_rq;
 	int this_cpu;
@@ -4801,7 +4798,7 @@ static void __ghost_wake_agent_on(int cpu)
 	 * mostly for paranoia.
 	 */
 	if (!READ_ONCE(dst_rq->ghost.blocked_in_run))
-		return;
+		return false;
 
 	/*
 	 * We can't write blocked_in_run, since we don't hold the RQ lock.
@@ -4810,7 +4807,7 @@ static void __ghost_wake_agent_on(int cpu)
 	 * an optimization to reduce the number of rescheds.
 	 */
 	if (READ_ONCE(dst_rq->ghost.agent_should_wake))
-		return;
+		return false;
 	WRITE_ONCE(dst_rq->ghost.agent_should_wake, true);
 
 	/* Write must come before the IPI/resched */
@@ -4828,6 +4825,8 @@ static void __ghost_wake_agent_on(int cpu)
 		resched_cpu_unlocked(cpu);
 	}
 	put_cpu();
+
+	return true;
 }
 
 static void ghost_wake_agent_on(int cpu)
@@ -7884,8 +7883,10 @@ static void pnt_prologue(struct rq *rq, struct task_struct *prev,
 	 * agent knows the cpu_seqnum from the last message it received, e.g.
 	 * the TASK_ON_CPU when prev started to run.
 	 */
-	if (READ_ONCE(rq->ghost.prev_resched_seq) == rq->ghost.cpu_seqnum)
+	if (READ_ONCE(rq->ghost.set_must_resched)) {
+		WRITE_ONCE(rq->ghost.set_must_resched, false);
 		rq->ghost.must_resched = true;
+	}
 
 	/*
 	 * A CFS task might have just gotten off cpu.  BPF agents benefit from
@@ -8056,13 +8057,14 @@ static int bpf_run_gtid(s64 gtid, u32 task_barrier, int run_flags, int cpu)
 	return __ghost_run_gtid_on(gtid, task_barrier, run_flags, cpu);
 }
 
-static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
+static int bpf_resched_cpu2(int cpu, int flags)
 {
 	int this_cpu = smp_processor_id();
 	struct rq *rq;
 	struct task_struct *curr;
 	const struct sched_class *curr_class;
 	struct ghost_enclave *this_enclave = get_target_enclave();
+	bool send_resched = true;
 
 	if (cpu < 0)
 		return -EINVAL;
@@ -8070,6 +8072,9 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 		return -ERANGE;
 	if (WARN_ON_ONCE(!this_enclave))
 		return -EXDEV;
+
+	if (flags >= GHOST_RESCHED_CPU_MAX)
+		return -EINVAL;
 
 	/*
 	 * RCU protects the allocation of cpu to the enclave and the existence
@@ -8091,19 +8096,37 @@ static int bpf_resched_cpu(int cpu, u64 cpu_seqnum)
 	 * core.c sched_class assignments to WRITE_ONCE.
 	 */
 	curr_class = curr->sched_class;
-	/* TODO(REBASE): use sched_class_above() in newer kernels */
-	if (!(curr_class == &ghost_sched_class ||
-	      curr_class == &idle_sched_class)) {
-		rcu_read_unlock();
-		return -EPERM;
+	if (!(flags & RESCHED_ANY_CLASS)) {
+		bool valid_class = false;
+
+		if (curr_class == &ghost_sched_class)
+			valid_class = (flags & RESCHED_GHOST_CLASS);
+		else if (curr_class == &idle_sched_class)
+			valid_class = (flags & RESCHED_IDLE_CLASS);
+		else
+			valid_class = (flags & RESCHED_OTHER_CLASS);
+
+		if (!valid_class) {
+			rcu_read_unlock();
+			return -EPERM;
+		}
 	}
-	WRITE_ONCE(rq->ghost.prev_resched_seq, cpu_seqnum);
-	if (cpu == this_cpu) {
-		set_tsk_need_resched(current);
-		set_preempt_need_resched();
-	} else {
-		resched_cpu_unlocked(cpu);
+
+	if (flags & SET_MUST_RESCHED)
+		WRITE_ONCE(rq->ghost.set_must_resched, true);
+
+	if (flags & WAKE_AGENT)
+		send_resched = !__ghost_wake_agent_on(cpu);
+
+	if (send_resched) {
+		if (cpu == this_cpu) {
+			set_tsk_need_resched(current);
+			set_preempt_need_resched();
+		} else {
+			resched_cpu_unlocked(cpu);
+		}
 	}
+
 	rcu_read_unlock();
 	return 0;
 }
@@ -8398,7 +8421,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.timerfd_triggered = _ghost_timerfd_triggered,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
-	.bpf_resched_cpu = bpf_resched_cpu,
+	.bpf_resched_cpu2 = bpf_resched_cpu2,
 	.ghost_sched_is_valid_access = ghost_sched_is_valid_access,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.bpf_link_attach = _ghost_bpf_link_attach,

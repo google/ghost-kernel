@@ -4043,12 +4043,21 @@ enum bpf_func_id {
  *
  *	Return
  *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_resched_cpu2(u32 cpu, int flags)
+ *	Description
+ *		Reschedules **cpu**, with options specified in **flags**.
+ *		Flag options come from include/uapi/linux/ghost.h.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
  */
 enum {
 	__BPF_FUNC_GHOST_BASE = 3000,
 	BPF_FUNC_ghost_wake_agent = __BPF_FUNC_GHOST_BASE,
 	BPF_FUNC_ghost_run_gtid,
 	BPF_FUNC_ghost_resched_cpu,
+	BPF_FUNC_ghost_resched_cpu2,
 	__BPF_FUNC_GHOST_MAX_ID,
 };
 
