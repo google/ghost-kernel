@@ -5347,6 +5347,11 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	next = find_task_by_gtid(gtid);
 	if (next == NULL || next->ghost.agent) {
 		rcu_read_unlock();
+		/*
+		 * This is the one case where we don't callback to BPF-MSG with
+		 * the error.  MSG_TASK_LATCH_FAILURE runs with the task rq
+		 * lock, but we couldn't find the task to lock.
+		 */
 		return -ENOENT;
 	}
 
@@ -5495,6 +5500,37 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	/* fall-through */
 
 out_unlock:
+	if (ret) {
+		/*
+		 * ghost_run_gtid is only called from BPF-PNT, and there is no
+		 * way to call from BPF-MSG to BPF-PNT, so we do not need to
+		 * worry about recursing and clobbering a currently-in-use
+		 * percpu bpf_ghost_msg.
+		 */
+		struct bpf_ghost_msg *msg = this_cpu_ptr(&bpf_ghost_msg);
+		struct ghost_msg_payload_task_latch_failure *lf =
+			&msg->latch_failure;
+
+		msg->type = MSG_TASK_LATCH_FAILURE;
+		/*
+		 * Read the seqnum directly.  task_barrier_get() has a VM_BUG_ON
+		 * if next is the agent, which is a legitimate error condition.
+		 */
+		msg->seqnum = next->ghost.status_word->barrier;
+		lf->gtid = gtid_of(next);
+		lf->errno = -ret;
+
+		/*
+		 * Note that next might not be in this_enclave, or any enclave.
+		 * Still, it has a gtid and we tell this_enclave (who submitted
+		 * the latch request) about the error.
+		 *
+		 * Discard the return value: we never send this message to
+		 * userspace.
+		 */
+		(void) ghost_bpf_msg_send(this_enclave, msg);
+	}
+
 	if (next_rq != this_rq) {
 		/*
 		 * We didn't move next to this cpu.  (Note the BUG_ON after
