@@ -1108,14 +1108,15 @@ static void set_txn_state(int *ptr, enum ghost_txn_state val)
 		*ptr = val;
 }
 
-static int validate_next_task(struct rq *rq, struct task_struct *next,
+static int validate_next_task(struct ghost_enclave *e, struct rq *rq,
+			      struct task_struct *next,
 			      uint32_t task_barrier, int *state)
 {
 	lockdep_assert_held(&rq->lock);
 
-	if (next->ghost.agent) {
+	if (!e) {
 		set_txn_state(state, GHOST_TXN_INVALID_TARGET);
-		return -EINVAL;
+		return -EXDEV;
 	}
 
 	/*
@@ -1151,6 +1152,11 @@ static int validate_next_task(struct rq *rq, struct task_struct *next,
 	if (!task_on_rq_queued(next)) {
 		set_txn_state(state, GHOST_TXN_TARGET_NOT_RUNNABLE);
 		return -EINVAL;
+	}
+
+	if (next->ghost.enclave != e) {
+		set_txn_state(state, GHOST_TXN_NOT_PERMITTED);
+		return -EPERM;
 	}
 
 	return 0;
@@ -1538,7 +1544,8 @@ static struct task_struct *_pick_next_task_ghost(struct rq *rq)
 
 		/* Suppress barrier check in validate_next_task(). */
 		barrier = task_barrier_get(next);
-		if (validate_next_task(rq, next, barrier, NULL) ||
+		if (validate_next_task(agent->ghost.enclave, rq, next, barrier,
+				       NULL) ||
 		    validate_next_offcpu(rq, next, NULL)) {
 			/*
 			 * Welp! A previously latched and validated
@@ -5432,7 +5439,8 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 		goto out_unlock;
 	}
 
-	ret = validate_next_task(next_rq, next, task_barrier, /*state=*/ NULL);
+	ret = validate_next_task(this_enclave, next_rq, next, task_barrier,
+				 /*state=*/ NULL);
 
 	if (ret)
 		goto out_unlock;
@@ -5823,6 +5831,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	}
 
 	if (likely(gtid > 0)) {
+		struct ghost_enclave *e;
+
 		rcu_read_lock();
 		next = find_task_by_gtid(gtid);
 		if (next == NULL || next->ghost.agent) {
@@ -5833,13 +5843,16 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		}
 
 		rq = task_rq_lock(next, &rf);
-		rcu_read_unlock();
-
-		if (validate_next_task(rq, next, txn->task_barrier, &state)) {
+		e = rcu_dereference(per_cpu(enclave, run_cpu));
+		if (validate_next_task(e, rq, next, txn->task_barrier,
+				       &state)) {
 			task_rq_unlock(rq, next, &rf);
+			rcu_read_unlock();
 			rq = NULL;
 			goto out;
 		}
+		e = NULL; /* don't use e outside the rcu read lock. */
+		rcu_read_unlock();
 
 		if (!(commit_flags & ALLOW_TASK_ONCPU) ||
 		    (task_cpu(next) != run_cpu)) {
