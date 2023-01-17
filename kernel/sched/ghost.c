@@ -5424,6 +5424,15 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	lockdep_assert_held(&next_rq->lock);
 	lockdep_assert_held(&next->pi_lock);
 
+	/*
+	 * The verifier checks that this helper is only called from BPF-PNT, but
+	 * in case that ever changes or if we move to kfuncs, double check here.
+	 */
+	if (ps->prog_type != BPF_PROG_TYPE_GHOST_SCHED) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	if (!run_flags_valid(run_flags, supported_flags, gtid)) {
 		ret = -EINVAL;
 		goto out_unlock;
@@ -5477,17 +5486,6 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	    (task_has_ghost_policy(next_rq->curr) ||
 	     next_rq->ghost.latched_task)) {
 		ret = -ESTALE;
-		goto out_unlock;
-	}
-
-	/*
-	 * If the RQ is in the middle of PNT (where it briefly unlocks),
-	 * ghost_can_schedule() is not accurate.  rq->curr is still the
-	 * task that is scheduling, and it may be from CFS.
-	 */
-	if (ps->prog_type != BPF_PROG_TYPE_GHOST_SCHED
-	    && !ghost_can_schedule(next_rq, gtid)) {
-		ret = -ENOSPC;
 		goto out_unlock;
 	}
 
