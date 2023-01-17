@@ -5328,19 +5328,14 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 
 	WARN_ON_ONCE(preemptible());
 
-	if (!run_flags_valid(run_flags, supported_flags, gtid))
-		return -EINVAL;
-
-	if (WARN_ON_ONCE(!this_enclave))
-		return -EXDEV;
+	/*
+	 * For all errors, do the ENOENT check first, and any other error
+	 * afterwards must hold the task's rq lock.  This guarantee allows BPF
+	 * to synchronize with its message stream.
+	 */
 
 	/* RCU for both find_task_by_gtid and to protect pcpu->enclave. */
 	rcu_read_lock();
-
-	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
-		rcu_read_unlock();
-		return -EXDEV;
-	}
 
 	next = find_task_by_gtid(gtid);
 	if (next == NULL || next->ghost.agent) {
@@ -5421,6 +5416,21 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 
 	lockdep_assert_held(&next_rq->lock);
 	lockdep_assert_held(&next->pi_lock);
+
+	if (!run_flags_valid(run_flags, supported_flags, gtid)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	if (WARN_ON_ONCE(!this_enclave)) {
+		ret = -EXDEV;
+		goto out_unlock;
+	}
+
+	if (rcu_dereference(per_cpu(enclave, cpu)) != this_enclave) {
+		ret = -EXDEV;
+		goto out_unlock;
+	}
 
 	ret = validate_next_task(next_rq, next, task_barrier, /*state=*/ NULL);
 
