@@ -192,7 +192,7 @@ static void forget_ephemeral_enclave(struct ghost_enclave *e)
 	spin_unlock_irqrestore(&ephemeral_enclaves_lock, irq_flags);
 }
 
-static inline gtid_t gtid(struct task_struct *p)
+static inline gtid_t gtid_of(struct task_struct *p)
 {
 	return p->gtid;
 }
@@ -291,12 +291,12 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	ctx->dont_idle = false;
 
 	if (rq->ghost.latched_task) {
-		ctx->next_gtid = gtid(rq->ghost.latched_task);
+		ctx->next_gtid = gtid_of(rq->ghost.latched_task);
 	} else if (task_has_ghost_policy(prev)
 		   && prev->state == TASK_RUNNING
 		   && prev != agent
 		   && !rq->ghost.must_resched) {
-		ctx->next_gtid = gtid(prev);
+		ctx->next_gtid = gtid_of(prev);
 	} else {
 		ctx->next_gtid = 0;
 	}
@@ -2584,7 +2584,7 @@ static void ghost_initialize_status_word(struct task_struct *p)
 	if (WARN_ON_ONCE(sw->flags != GHOST_SW_F_ALLOCATED))
 		return;
 
-	sw->gtid = gtid(p);
+	sw->gtid = gtid_of(p);
 	sw->barrier = 0;
 	sw->runtime = 0;
 
@@ -4226,7 +4226,7 @@ static bool cpu_deliver_msg_not_idle(struct rq *rq, struct task_struct *next)
 
 	msg->type = MSG_CPU_NOT_IDLE;
 	payload->cpu = cpu_of(rq);
-	payload->next_gtid = gtid(next);
+	payload->next_gtid = gtid_of(next);
 
 	return !produce_for_agent(rq, msg);
 }
@@ -4324,11 +4324,11 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 		return;
 
 	msg->type = MSG_TASK_NEW;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 
 	rcu_read_lock();
 	parent = rcu_dereference(p->real_parent);
-	payload->parent_gtid = parent ? gtid(parent) : 0;
+	payload->parent_gtid = parent ? gtid_of(parent) : 0;
 	rcu_read_unlock();
 
 	payload->runnable = runnable;
@@ -4352,7 +4352,7 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 		return;
 
 	msg->type = MSG_TASK_YIELD;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
@@ -4386,7 +4386,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 	WARN_ON_ONCE(from_switchto && rq->ghost.switchto_count > 0);
 
 	msg->type = MSG_TASK_PREEMPT;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
@@ -4406,7 +4406,7 @@ static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 		return;
 
 	msg->type = MSG_TASK_BLOCKED;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
@@ -4424,7 +4424,7 @@ static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 		return false;
 
 	msg->type = MSG_TASK_DEAD;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	return produce_for_task(p, msg) == 0;
 }
 
@@ -4437,7 +4437,7 @@ static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 		return false;
 
 	msg->type = MSG_TASK_DEPARTED;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
 	if (task_current(rq, p) && ghost_in_switchto(rq))
@@ -4469,7 +4469,7 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 		return;
 
 	msg->type = MSG_TASK_AFFINITY_CHANGED;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 
 	produce_for_task(p, msg);
 }
@@ -4488,7 +4488,7 @@ static void task_deliver_msg_priority_changed(struct rq *rq,
 		return;
 
 	msg->type = MSG_TASK_PRIORITY_CHANGED;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->nice = PRIO_TO_NICE(p->static_prio);
 
 	produce_for_task(p, msg);
@@ -4503,7 +4503,7 @@ static void task_deliver_msg_on_cpu(struct rq *rq, struct task_struct *p)
 		return;
 
 	msg->type = MSG_TASK_ON_CPU;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->commit_time = ktime_get_ns();
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
@@ -4534,7 +4534,7 @@ static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 		return;
 
 	msg->type = MSG_TASK_WAKEUP;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->agent_data = 0;
 	payload->deferrable = deferrable_wakeup(p);
 	payload->last_ran_cpu = p->ghost.twi.last_ran_cpu;
@@ -4553,7 +4553,7 @@ static void task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
 		return;
 
 	msg->type = MSG_TASK_SWITCHTO;
-	payload->gtid = gtid(p);
+	payload->gtid = gtid_of(p);
 	payload->runtime = p->se.sum_exec_runtime;
 	payload->cpu = cpu_of(rq);
 	payload->cpu_seqnum = ++rq->ghost.cpu_seqnum;
