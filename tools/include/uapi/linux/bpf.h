@@ -5185,6 +5185,7 @@ struct bpf_ghost_sched {
 				 * tasks will not.
 				 */
 	__u8 dont_idle;		/* set true to prevent the cpu from idling */
+	__u8 must_resched;	/* set true force prev to get off cpu */
 	__u64 next_gtid;	/* scheduler will run this next, unless you do
 				 * something (or agent_runnable or
 				 * should_yield).  This is either a latched task

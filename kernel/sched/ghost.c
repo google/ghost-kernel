@@ -289,6 +289,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	ctx->agent_runnable = ctx->agent_on_rq && !rq->ghost.blocked_in_run;
 	ctx->might_yield = !cpu_is_available(rq);
 	ctx->dont_idle = false;
+	ctx->must_resched = false;
 
 	if (rq->ghost.latched_task) {
 		ctx->next_gtid = gtid_of(rq->ghost.latched_task);
@@ -320,6 +321,9 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	 * task, which is fine.  Next time we run BPF-PNT, we'll reset it.
 	 */
 	rq->ghost.dont_idle_once = ctx->dont_idle;
+
+	if (ctx->must_resched)
+		rq->ghost.must_resched = true;
 }
 
 /*
