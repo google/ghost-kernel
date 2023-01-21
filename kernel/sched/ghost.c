@@ -833,13 +833,7 @@ static void _dequeue_task_ghost(struct rq *rq, struct task_struct *p, int flags)
 	WARN_ON_ONCE(!on_ghost_rq(rq, p));
 	list_del_init(&p->ghost.run_list);
 
-	/*
-	 * Clear the remotely latched task when it is dequeued (but only if
-	 * it isn't spurious). Although unlikely this can happen via the
-	 * ghost_run()->move_queued_task() code path.
-	 */
-	if (!spurious)
-		invalidate_cached_tasks(rq, p);
+	invalidate_cached_tasks(rq, p);
 
 	if (is_agent(rq, p)) {
 		WARN_ON_ONCE(rq->ghost.blocked_in_run && !spurious);
