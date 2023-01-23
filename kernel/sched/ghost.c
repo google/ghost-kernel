@@ -737,6 +737,8 @@ static void _switched_to_ghost(struct rq *rq, struct task_struct *p)
 {
 	struct ghost_status_word *status_word = p->ghost.status_word;
 
+	VM_BUG_ON(!p->ghost.new_task);
+
 	if (task_running(rq, p)) {
 		ghost_sw_set_time(status_word, ktime_get_ns());
 		ghost_sw_set_flag(status_word, GHOST_SW_TASK_ONCPU);
@@ -748,6 +750,7 @@ static void _switched_to_ghost(struct rq *rq, struct task_struct *p)
 	WRITE_ONCE(status_word->runtime, p->se.sum_exec_runtime);
 
 	if (is_agent(rq, p) || !task_running(rq, p)) {
+		p->ghost.new_task = false;
 		ghost_task_new(rq, p);
 		ghost_wake_agent_of(p);    /* no-op if 'p' is an agent */
 	} else {
@@ -761,8 +764,6 @@ static void _switched_to_ghost(struct rq *rq, struct task_struct *p)
 		 * a context switch to the local agent at the earliest
 		 * possible opportunity.
 		 */
-		VM_BUG_ON(p->ghost.new_task);
-		p->ghost.new_task = true;  /* see ghost_prepare_task_switch() */
 	}
 }
 
@@ -2677,7 +2678,7 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	kref_get(&e->kref);
 	p->ghost.enclave = e;
 	p->ghost.status_word = sw;
-	p->ghost.new_task = forked;
+	p->ghost.new_task = true;
 
 	if (!forked) {
 		ghost_initialize_status_word(p);
