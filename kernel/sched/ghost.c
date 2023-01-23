@@ -8134,6 +8134,7 @@ static int bpf_resched_cpu2(int cpu, int flags)
 	const struct sched_class *curr_class;
 	struct ghost_enclave *this_enclave = get_target_enclave();
 	bool send_resched = true;
+	const int valid_flags = (GHOST_RESCHED_CPU_MAX - 1);
 
 	if (cpu < 0)
 		return -EINVAL;
@@ -8142,7 +8143,7 @@ static int bpf_resched_cpu2(int cpu, int flags)
 	if (WARN_ON_ONCE(!this_enclave))
 		return -EXDEV;
 
-	if (flags >= GHOST_RESCHED_CPU_MAX)
+	if (flags & ~valid_flags)
 		return -EINVAL;
 
 	/*
@@ -8187,6 +8188,10 @@ static int bpf_resched_cpu2(int cpu, int flags)
 	if (flags & WAKE_AGENT)
 		send_resched = !__ghost_wake_agent_on(cpu);
 
+	/*
+	 * Optimization to elide an extra resched if we got one
+	 * for free from waking the agent.
+	 */
 	if (send_resched) {
 		if (cpu == this_cpu) {
 			set_tsk_need_resched(current);
