@@ -45,6 +45,14 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
 static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
 
 /*
+ * Caches the preferred cpu to wake up in response to a ghost message
+ * being generated. This is used like TLS for the current thread; we only
+ * ever read and modify the per-cpu entry for the current cpu, while in
+ * preempt-disabled regions.
+ */
+static DEFINE_PER_CPU(int, pref_wakeup_cpu);
+
+/*
  * Used from bpf helpers to determine our caller's state, e.g. "are we in
  * bpf-pnt?  if so, what are the rq flags?".
  *
@@ -345,6 +353,9 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 		rcu_read_unlock();
 		return true;
 	}
+
+	msg->pref_cpu = -1; /* may be overwritten by BPF */
+
 	/* Program returns 0 if they want us to send the message. */
 	old_target = set_target_enclave(e);
 	save_prog_state(&old_state);
@@ -354,6 +365,10 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 	restore_prog_state(&old_state);
 	restore_target_enclave(old_target);
 	rcu_read_unlock();
+
+	if (msg->pref_cpu != -1)
+		per_cpu(pref_wakeup_cpu, smp_processor_id()) = msg->pref_cpu;
+
 	return send;
 }
 #else
@@ -1997,6 +2012,8 @@ static void ___enclave_add_cpu(struct ghost_enclave *e, int cpu)
 
 	cpumask_set_cpu(cpu, &e->cpus);
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), txn);
+
+	per_cpu(pref_wakeup_cpu, cpu) = -1;
 }
 
 /*
@@ -3738,6 +3755,30 @@ static int target_cpu(struct ghost_queue *q, int preferred_cpu)
 	return cpu;
 }
 
+/*
+ * Called right after we've generated a message. This returns a preferred
+ * cpu to wake up (chosen by BPF).
+ *
+ * It is expected that we've remain preempt-disabled since the time the message
+ * was generated, to avoid any clobbering of `pref_wakeup_cpu`.
+ */
+static int preferred_target_cpu(int fallback_cpu)
+{
+	int this_cpu = smp_processor_id();
+	int pref = per_cpu(pref_wakeup_cpu, this_cpu);
+
+	if (pref == -1)
+		return fallback_cpu;
+
+	/* reset */
+	per_cpu(pref_wakeup_cpu, this_cpu) = -1;
+
+	if (unlikely(pref < 0 || pref >= nr_cpu_ids || !cpu_online(pref)))
+		return fallback_cpu;
+
+	return pref;
+}
+
 static int task_target_cpu(struct task_struct *p)
 {
 	struct rq *rq = task_rq(p);
@@ -3751,7 +3792,7 @@ static int task_target_cpu(struct task_struct *p)
 	if (unlikely(p->ghost.agent))
 		return -1;
 
-	return target_cpu(p->ghost.dst_q, task_cpu(p));
+	return target_cpu(p->ghost.dst_q, preferred_target_cpu(task_cpu(p)));
 }
 
 static int agent_target_cpu(struct rq *rq)
@@ -3761,7 +3802,8 @@ static int agent_target_cpu(struct rq *rq)
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(!is_agent(rq, agent));
 
-	return target_cpu(agent->ghost.dst_q, task_cpu(agent));
+	return target_cpu(agent->ghost.dst_q,
+			  preferred_target_cpu(task_cpu(agent)));
 }
 
 static int ghost_config_queue_wakeup(
