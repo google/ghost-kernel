@@ -5541,7 +5541,14 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	/* fall-through */
 
 out_unlock:
-	if (ret) {
+
+	/*
+	 * After release_from_ghost(), which sends Departed, the kernel no
+	 * longer has access to the task's status_word.
+	 *
+	 * We should have this_enclave (WARN_ON above).
+	 */
+	if (ret && next->ghost.status_word && this_enclave) {
 		/*
 		 * ghost_run_gtid is only called from BPF-PNT, and there is no
 		 * way to call from BPF-MSG to BPF-PNT, so we do not need to
