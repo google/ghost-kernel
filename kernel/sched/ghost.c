@@ -916,22 +916,12 @@ static void _set_next_task_ghost(struct rq *rq, struct task_struct *p,
 		return;
 	/*
 	 * set_curr_task() is called when scheduling properties of a running
-	 * task change (e.g. affinity, priority, sched_class etc). Get this
-	 * task offcpu so the agent can incorporate these changes into its
-	 * scheduling policy.
-	 *
-	 * 1. force_offcpu() will get 'rq->curr' offcpu.
-	 * 2. ghost_produce_prev_msgs() (in pnt_prologue) will ensure we produce
-	 * TASK_PREEMPTED so the agent knows 'rq->curr' got offcpu.
-	 *
-	 * The assumption behind forcing the task offcpu is that changes to
-	 * these properties are advertised via messages (e.g. TASK_AFFINITY
-	 * etc).
-	 *
-	 * (another approach might be to produce a TASK_CHANGED msg here and
-	 *  let the agent figure out exactly what changed).
+	 * task change (e.g. affinity, priority, sched_class etc).  New tasks
+	 * must get off cpu immediately; force_offcpu() will get 'rq->curr'
+	 * offcpu.  For other tasks, it's up to the agent to resched the cpu.
 	 */
-	force_offcpu(rq, true);
+	if (p->ghost.new_task)
+		force_offcpu(rq, /*resched=*/true);
 }
 
 /*
