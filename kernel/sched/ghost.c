@@ -1129,12 +1129,17 @@ static int validate_next_task(struct ghost_enclave *e, struct rq *rq,
 	 */
 	if (next->inhibit_task_msgs) {
 		set_txn_state(state, GHOST_TXN_TARGET_STALE);
-		return -EINVAL;
+		return -ESTALE;
 	}
 
+	/*
+	 * If 'next' is not in ghost then it is more likely that the agent
+	 * hasn't yet handled the DEPARTED msg which is why we treat this like
+	 * an ESTALE.
+	 */
 	if (!task_has_ghost_policy(next)) {
-		set_txn_state(state, GHOST_TXN_INVALID_TARGET);
-		return -EINVAL;
+		set_txn_state(state, GHOST_TXN_TARGET_STALE);
+		return -ESTALE;
 	}
 
 	/*
