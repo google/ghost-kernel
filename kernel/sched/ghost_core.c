@@ -1232,6 +1232,9 @@ BPF_CALL_1(bpf_ghost_wake_agent, u32, cpu)
 	if (WARN_ON_ONCE(!e))
 		return -ENODEV;
 
+	if (!e->abi->bpf_wake_agent)
+		return -ENOSYS;
+
 	return e->abi->bpf_wake_agent(cpu);
 }
 
@@ -1260,6 +1263,9 @@ BPF_CALL_3(bpf_ghost_run_gtid, s64, gtid, u32, task_barrier, int, run_flags)
 	/* Paranoia: this is not expected */
 	if (WARN_ON_ONCE(!e))
 		return -ENODEV;
+
+	if (!e->abi->bpf_run_gtid)
+		return -ENOSYS;
 
 	return e->abi->bpf_run_gtid(gtid, task_barrier, run_flags,
 				    smp_processor_id());
