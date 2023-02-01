@@ -1057,9 +1057,9 @@ static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	int waker_cpu = smp_processor_id();
 
-	/* For anything but wake ups, just return the task_cpu */
+	/* For anything but wake ups, just return the callers' preferred cpu */
 	if (!(wake_flags & (WF_TTWU | WF_FORK)))
-		return task_cpu(p);
+		return cpu;
 
 	/*
 	 * We have at least a couple of obvious choices here:
@@ -1085,10 +1085,10 @@ static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 	if (READ_ONCE(p->ghost.enclave->wake_on_waker_cpu))
 		p->ghost.twi.wake_up_cpu = waker_cpu;
 	else
-		p->ghost.twi.wake_up_cpu = task_cpu(p);
+		p->ghost.twi.wake_up_cpu = cpu;
 
 	p->ghost.twi.waker_cpu = waker_cpu;
-	p->ghost.twi.last_ran_cpu = task_cpu(p);
+	p->ghost.twi.last_ran_cpu = cpu;
 
 	return p->ghost.twi.wake_up_cpu;
 }
