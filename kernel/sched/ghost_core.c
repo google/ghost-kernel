@@ -1337,8 +1337,15 @@ static const struct bpf_func_proto bpf_ghost_resched_cpu2_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+/*
+ * Each ghost BPF program type can only be attached at a single point, so we can
+ * use the same func_proto for all program types and switch on the expected
+ * attach type ("eat" below) to limit which helpers can be called by which
+ * program types.  Using a single func_proto eliminates the risk of accidentally
+ * calling ghost_run_gtid from anywhere other than PNT.
+ */
 static const struct bpf_func_proto *
-ghost_sched_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ghost_bpf_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	int eat = bpf_prog_eat_type(prog);
 
@@ -1377,27 +1384,11 @@ static bool ghost_sched_is_valid_access(int off, int size,
 }
 
 const struct bpf_verifier_ops ghost_sched_verifier_ops = {
-	.get_func_proto		= ghost_sched_func_proto,
+	.get_func_proto		= ghost_bpf_func_proto,
 	.is_valid_access	= ghost_sched_is_valid_access,
 };
 
 const struct bpf_prog_ops ghost_sched_prog_ops = {};
-
-static const struct bpf_func_proto *
-ghost_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
-{
-	/* ghost func_ids are not in enum bpf_func_id */
-	switch ((int)func_id) {
-	case BPF_FUNC_ghost_wake_agent:
-		return &bpf_ghost_wake_agent_proto;
-	case BPF_FUNC_ghost_resched_cpu:
-		return &bpf_ghost_resched_cpu_proto;
-	case BPF_FUNC_ghost_resched_cpu2:
-		return &bpf_ghost_resched_cpu2_proto;
-	default:
-		return bpf_base_func_proto(func_id);
-	}
-}
 
 static bool ghost_msg_is_valid_access(int off, int size,
 				      enum bpf_access_type type,
@@ -1414,7 +1405,7 @@ static bool ghost_msg_is_valid_access(int off, int size,
 }
 
 const struct bpf_verifier_ops ghost_msg_verifier_ops = {
-	.get_func_proto		= ghost_msg_func_proto,
+	.get_func_proto		= ghost_bpf_func_proto,
 	.is_valid_access	= ghost_msg_is_valid_access,
 };
 
