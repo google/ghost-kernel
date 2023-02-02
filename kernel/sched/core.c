@@ -2920,17 +2920,17 @@ int select_task_rq(struct task_struct *p, int cpu, int wake_flags)
 		 * wakes up.  The rq is more of a temporary staging ground, and
 		 * the agent maintains the 'real' runqueue(s).
 		 *
-		 * You might be tempted to let the agent pick any cpu here, but
-		 * that is dangerous.  Since we use TTWU_QUEUE, we'll send a
-		 * resched IPI to that cpu, and the wakeup (ttwu_do_activate())
-		 * will happen in IRQ context.  It's possible to overload a cpu
-		 * with resched IPIs, so long as that cpu's *execution* is not
-		 * required for the wake-run-block-wake loop.  i.e. it is stuck
-		 * handling IPIs for wakeups, and other cpus latch and run the
-		 * task, generating an endless stream of wakeup IPIs.  This is
-		 * exacerbated by bpf-msg, but could happen with enough cpus
-		 * waking tasks or with some inefficient/unscalable
-		 * sched_class->task_woken().
+		 * Be careful here: the agent can pick the cpu and can choose if
+		 * it wants to use TTWU_QUEUE.  That is dangerous.  TTWU_QUEUE
+		 * will send a resched IPI to the cpu, and the wakeup
+		 * (ttwu_do_activate()) will happen in IRQ context.  It's
+		 * possible to overload a cpu with resched IPIs, so long as that
+		 * cpu's *execution* is not required for the wake-run-block-wake
+		 * loop.  i.e. it is stuck handling IPIs for wakeups, and other
+		 * cpus latch and run the task, generating an endless stream of
+		 * wakeup IPIs.  This is exacerbated by bpf-msg, but could
+		 * happen with enough cpus waking tasks or with some
+		 * inefficient/unscalable sched_class->task_woken().
 		 *
 		 * There are two 'safe' cpus to select: our current cpu, which
 		 * won't require an IPI, and task_cpu(p).  task_cpu will change
@@ -2939,9 +2939,6 @@ int select_task_rq(struct task_struct *p, int cpu, int wake_flags)
 		 * breaking the endless stream.
 		 */
 		cpu = select_task_rq_ghost(p, cpu, wake_flags);
-		if (WARN_ON_ONCE(cpu != task_cpu(p)
-				 && cpu != smp_processor_id()))
-			cpu = smp_processor_id();
 		if (!cpu_online(cpu))
 			cpu = smp_processor_id();
 		return cpu;
@@ -3293,6 +3290,13 @@ static inline bool ttwu_queue_cond(int cpu, int wake_flags)
 
 static bool ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags)
 {
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	if (p->ghost.twi.skip_ttwu_queue) {
+		p->ghost.twi.skip_ttwu_queue = false;
+		return false;
+	}
+#endif
+
 	if (sched_feat(TTWU_QUEUE) && ttwu_queue_cond(cpu, wake_flags)) {
 		if (WARN_ON_ONCE(cpu == smp_processor_id()))
 			return false;

@@ -638,6 +638,7 @@ struct sched_ghost_entity {
 		int last_ran_cpu;
 		int wake_up_cpu;
 		int waker_cpu;
+		bool skip_ttwu_queue;
 	} twi;	/* twi = task_wakeup_info */
 
 	struct list_head task_list;
@@ -1471,6 +1472,7 @@ struct task_struct {
 
 #define bpf_ghost_sched_kern bpf_ghost_sched
 #define bpf_ghost_msg_kern bpf_ghost_msg
+#define bpf_ghost_select_rq_kern bpf_ghost_select_rq
 
 struct bpf_prog;
 union bpf_attr;

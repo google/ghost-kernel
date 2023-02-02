@@ -218,6 +218,7 @@ struct ghost_enclave {
 #ifdef CONFIG_BPF
 	struct bpf_prog *bpf_pnt;
 	struct bpf_prog *bpf_msg_send;
+	struct bpf_prog *bpf_select_rq;
 #endif
 };
 
@@ -2235,6 +2236,10 @@ struct ghost_abi {
 					  enum bpf_access_type type,
 					  const struct bpf_prog *prog,
 					  struct bpf_insn_access_aux *info);
+	bool (*ghost_select_rq_is_valid_access)(
+			int off, int size, enum bpf_access_type type,
+			const struct bpf_prog *prog,
+			struct bpf_insn_access_aux *info);
 	int (*bpf_link_attach)(const union bpf_attr *attr,
 			       struct bpf_prog *prog,
 			       int ea_type, int ea_abi);

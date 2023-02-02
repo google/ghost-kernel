@@ -79,6 +79,8 @@ struct ghost_bpf_prog_state {
 		} bpf_pnt;
 		struct {
 		} bpf_msg;
+		struct {
+		} bpf_select_rq;
 	};
 };
 static DEFINE_PER_CPU(struct ghost_bpf_prog_state, __ghost_bpf_prog_state);
@@ -377,6 +379,86 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 
 	return send;
 }
+
+static int ghost_bpf_select_rq(struct task_struct *p, int task_cpu,
+			       int waker_cpu, int sd_flag,
+			       int wake_flags)
+{
+	struct ghost_enclave *e;
+	struct bpf_ghost_select_rq_kern ctx[1];
+	struct bpf_prog *prog;
+	struct ghost_bpf_prog_state old_state, *ps;
+	struct ghost_enclave *old_target;
+	int desired_cpu;
+
+	/*
+	 * We hold the pi_lock, but not the rq_lock.  Ghost-BPF typically uses
+	 * the RQ lock to be the "task lock", synchronizing the message stream
+	 * and latch attempts in BPF-PNT.  grep Treatise flux_header_bpf.h.
+	 * e.g. BPF-PNT only holds the task's rq_lock, not the pi_lock.
+	 *
+	 * In the case of select_task_rq(), the task is waking.  This means the
+	 * kernel "has the ball", and the BPF agent should not be attempting to
+	 * latch, so there's no need to worry about synchronizing with BPF-PNT.
+	 * Furthermore, all of the messages that could be delivered now also
+	 * require the pi_lock, e.g. prio_change, departed, etc.
+	 *
+	 * So from the perspective of BPF, the task is "locked" for
+	 * bpf_ghost_select_rq().  It just happens to be the pi_lock, not the
+	 * rq_lock, and we're using kernel internals/rules to maintain the
+	 * mutual exclusion invariant that the agent relies on.
+	 */
+
+	lockdep_assert_held(&p->pi_lock);
+
+	e = p->ghost.enclave;
+	VM_BUG_ON(!e);
+
+	rcu_read_lock();
+	prog = rcu_dereference(e->bpf_select_rq);
+	if (!prog) {
+		rcu_read_unlock();
+		return -1;
+	}
+	/* Zero the struct to avoid leaking stack data in struct padding */
+	memset(ctx, 0, sizeof(struct bpf_ghost_select_rq_kern));
+
+	ctx->gtid = gtid_of(p);
+	ctx->task_cpu = task_cpu;
+	ctx->waker_cpu = waker_cpu;
+	ctx->sd_flag = sd_flag;
+	ctx->wake_flags = wake_flags;
+	ctx->skip_ttwu_queue = false;
+
+	old_target = set_target_enclave(e);
+	save_prog_state(&old_state);
+	ps = get_prog_state();
+
+	ps->prog_type = BPF_PROG_TYPE_GHOST_SELECT_RQ;
+	desired_cpu = BPF_PROG_RUN(prog, ctx);
+
+	restore_prog_state(&old_state);
+	restore_target_enclave(old_target);
+
+	rcu_read_unlock();
+
+	/*
+	 * TODO(brho): consider an enclave tunable to "live dangerously".
+	 * Depending on the workload, a buggy agent in conjunction with
+	 * TTWU_QUEUE could keep a cpu stuck in IRQ context handling resched
+	 * IPIs.  See select_task_rq() in core.c.
+	 */
+	if (ctx->skip_ttwu_queue)
+		p->ghost.twi.skip_ttwu_queue = true;
+
+	if (desired_cpu < 0 || desired_cpu >= nr_cpu_ids ||
+	    !cpu_online(desired_cpu)) {
+		/* Less than 0 means to check the wake_on_waker_cpu tunable */
+		desired_cpu = -1;
+	}
+	return desired_cpu;
+}
+
 #else
 
 static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
@@ -390,6 +472,14 @@ static inline bool ghost_bpf_msg_send(struct ghost_enclave *e,
 {
 	return true;
 }
+
+static inline int ghost_bpf_select_rq(struct task_struct *p, int task_cpu,
+				      int waker_cpu, int sd_flag,
+				      int wake_flags)
+{
+	return task_cpu;
+}
+
 #endif	/* CONFIG_BPF */
 
 /*
@@ -1062,6 +1152,12 @@ static int _balance_ghost(struct rq *rq, struct task_struct *prev,
 static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	int waker_cpu = smp_processor_id();
+	int desired_cpu;
+
+	desired_cpu = ghost_bpf_select_rq(p, cpu, waker_cpu, wake_flags & 0xF,
+					  wake_flags);
+	if (desired_cpu >= 0)
+		return desired_cpu;
 
 	/* For anything but wake ups, just return the callers' preferred cpu */
 	if (!(wake_flags & (WF_TTWU | WF_FORK)))
@@ -8473,6 +8569,19 @@ static bool ghost_msg_is_valid_access(int off, int size,
 	return true;
 }
 
+static bool ghost_select_rq_is_valid_access(int off, int size,
+					    enum bpf_access_type type,
+					    const struct bpf_prog *prog,
+					    struct bpf_insn_access_aux *info)
+{
+	/* The verifier guarantees that size > 0. */
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_select_rq) ||
+	    off % size)
+		return false;
+
+	return true;
+}
+
 static int ghost_sched_pnt_attach(struct ghost_enclave *e,
 				  struct bpf_prog *prog)
 {
@@ -8523,6 +8632,31 @@ static void ghost_msg_send_detach(struct ghost_enclave *e,
 	spin_unlock_irqrestore(&e->lock, irq_fl);
 }
 
+static int ghost_select_rq_attach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_select_rq) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_select_rq, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_select_rq_detach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_select_rq, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
 static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 			   int prog_type, int attach_type)
 {
@@ -8544,6 +8678,17 @@ static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 		switch (attach_type) {
 		case BPF_GHOST_MSG_SEND:
 			err = ghost_msg_send_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad msg bpf attach_type %d", attach_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+		switch (attach_type) {
+		case BPF_GHOST_SELECT_RQ:
+			err = ghost_select_rq_attach(e, prog);
 			break;
 		default:
 			pr_warn("bad msg bpf attach_type %d", attach_type);
@@ -8578,6 +8723,17 @@ static void bpf_link_detach(struct ghost_enclave *e, struct bpf_prog *prog,
 		switch (attach_type) {
 		case BPF_GHOST_MSG_SEND:
 			ghost_msg_send_detach(e, prog);
+			break;
+		default:
+			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
+				  e->id, prog_type, attach_type);
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+		switch (attach_type) {
+		case BPF_GHOST_SELECT_RQ:
+			ghost_select_rq_detach(e, prog);
 			break;
 		default:
 			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
@@ -8649,6 +8805,14 @@ static int _ghost_bpf_link_attach(const union bpf_attr *attr,
 	case BPF_PROG_TYPE_GHOST_MSG:
 		switch (ea_type) {
 		case BPF_GHOST_MSG_SEND:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+		switch (ea_type) {
+		case BPF_GHOST_SELECT_RQ:
 			break;
 		default:
 			return -EINVAL;
@@ -8741,6 +8905,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.bpf_resched_cpu2 = bpf_resched_cpu2,
 	.ghost_sched_is_valid_access = ghost_sched_is_valid_access,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
+	.ghost_select_rq_is_valid_access = ghost_select_rq_is_valid_access,
 	.bpf_link_attach = _ghost_bpf_link_attach,
 
 	/* ghost_agent_sched_class callbacks */

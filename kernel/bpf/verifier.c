@@ -7988,6 +7988,9 @@ static int check_return_code(struct bpf_verifier_env *env)
 	case BPF_PROG_TYPE_GHOST_SCHED:
 		range = tnum_range(0, INT_MAX);
 		break;
+	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+		range = tnum_range(INT_MIN, INT_MAX);
+		break;
 	case BPF_PROG_TYPE_EXT:
 		/* freplace program can return anything as its return value
 		 * depends on the to-be-replaced kernel func or bpf program.
@@ -12028,6 +12031,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
 	switch ((*prog)->type) {
 	case BPF_PROG_TYPE_GHOST_SCHED:
 	case BPF_PROG_TYPE_GHOST_MSG:
+	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
 		env->bypass_spec_v1 = true;
 		env->bypass_spec_v4 = true;
 		env->allow_ptr_leaks = true;

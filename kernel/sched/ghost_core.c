@@ -1411,6 +1411,29 @@ const struct bpf_verifier_ops ghost_msg_verifier_ops = {
 
 const struct bpf_prog_ops ghost_msg_prog_ops = {};
 
+static bool ghost_select_rq_is_valid_access(int off, int size,
+					    enum bpf_access_type type,
+					    const struct bpf_prog *prog,
+					    struct bpf_insn_access_aux *info)
+{
+	int version = bpf_prog_eat_abi(prog);
+	const struct ghost_abi *abi = ghost_abi_lookup(version);
+
+	if (!abi || !abi->ghost_select_rq_is_valid_access)
+		return false;
+
+	return abi->ghost_select_rq_is_valid_access(off, size, type, prog,
+						    info);
+}
+
+const struct bpf_verifier_ops ghost_select_rq_verifier_ops = {
+	.get_func_proto		= ghost_bpf_func_proto,
+	.is_valid_access	= ghost_select_rq_is_valid_access,
+};
+
+const struct bpf_prog_ops ghost_select_rq_prog_ops = {};
+
+
 int ghost_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	const struct ghost_abi *abi;

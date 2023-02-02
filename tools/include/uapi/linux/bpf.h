@@ -204,6 +204,8 @@ enum bpf_prog_type {
 #define BPF_PROG_TYPE_GHOST_SCHED	BPF_PROG_TYPE_GHOST_SCHED
 	BPF_PROG_TYPE_GHOST_MSG,
 #define BPF_PROG_TYPE_GHOST_MSG 	BPF_PROG_TYPE_GHOST_MSG
+	BPF_PROG_TYPE_GHOST_SELECT_RQ,
+#define BPF_PROG_TYPE_GHOST_SELECT_RQ	BPF_PROG_TYPE_GHOST_SELECT_RQ
 };
 
 enum bpf_attach_type {
@@ -255,7 +257,9 @@ enum {
 #define BPF_GHOST_SCHED_PNT	BPF_GHOST_SCHED_PNT
 	BPF_GHOST_MSG_SEND,
 #define BPF_GHOST_MSG_SEND	BPF_GHOST_MSG_SEND
-	__MAX_BPF_GHOST_ATTACH_TYPE
+	BPF_GHOST_SELECT_RQ,
+#define BPF_GHOST_SELECT_RQ	BPF_GHOST_SELECT_RQ
+	__MAX_BPF_GHOST_ATTACH_TYPE,
 };
 
 enum bpf_link_type {
@@ -5198,6 +5202,15 @@ struct bpf_ghost_sched {
 				 * or was current and still TASK_RUNNING in PNT.
 				 * It will be preempted if you latch.
 				 */
+};
+
+struct bpf_ghost_select_rq {
+	__u64 gtid;
+	__u32 task_cpu;
+	__u32 waker_cpu;
+	__u32 sd_flag;
+	__u32 wake_flags;
+	__u8 skip_ttwu_queue;
 };
 
 /*
