@@ -42,7 +42,13 @@ static DEFINE_PER_CPU_READ_MOSTLY(struct ghost_txn *, ghost_txn);
  * Use per-cpu memory instead of stack memory to avoid memsetting.  We only
  * send one message at a time per cpu.
  */
-static DEFINE_PER_CPU(struct bpf_ghost_msg, bpf_ghost_msg);
+static DEFINE_PER_CPU(struct bpf_ghost_msg, __bpf_ghost_msg);
+
+static struct bpf_ghost_msg *this_cpu_ghost_msg(void)
+{
+	VM_BUG_ON(!irqs_disabled());
+	return this_cpu_ptr(&__bpf_ghost_msg);
+}
 
 /*
  * Caches the preferred cpu to wake up in response to a ghost message
@@ -4156,7 +4162,7 @@ static inline bool cpu_skip_message(struct rq *rq)
 
 static inline bool cpu_deliver_msg_tick(struct rq *rq)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_cpu_tick *payload = &msg->cpu_tick;
 
 	if (cpu_skip_message(rq))
@@ -4172,7 +4178,7 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 
 static inline bool cpu_deliver_msg_cpu_available(struct rq *rq)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_cpu_available *payload = &msg->cpu_available;
 
 	if (cpu_skip_message(rq))
@@ -4188,7 +4194,7 @@ static inline bool cpu_deliver_msg_cpu_available(struct rq *rq)
 
 static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_cpu_busy *payload = &msg->cpu_busy;
 
 	if (cpu_skip_message(rq))
@@ -4204,7 +4210,7 @@ static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq)
 
 static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_agent_blocked *payload = &msg->agent_blocked;
 
 	if (cpu_skip_message(rq))
@@ -4220,7 +4226,7 @@ static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq)
 
 static inline bool cpu_deliver_msg_agent_wakeup(struct rq *rq)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_agent_wakeup *payload = &msg->agent_wakeup;
 
 	if (cpu_skip_message(rq))
@@ -4238,7 +4244,7 @@ static inline bool cpu_deliver_msg_agent_wakeup(struct rq *rq)
 static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t type,
 					     uint64_t cookie)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_timer *payload = &msg->timer;
 
 	if (cpu_skip_message(rq))
@@ -4254,7 +4260,7 @@ static inline bool cpu_deliver_timer_expired(struct rq *rq, uint64_t type,
 
 static bool cpu_deliver_msg_not_idle(struct rq *rq, struct task_struct *next)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_cpu_not_idle *payload = &msg->cpu_not_idle;
 
 	if (cpu_skip_message(rq))
@@ -4352,7 +4358,7 @@ static inline int __task_deliver_common(struct rq *rq, struct task_struct *p)
 static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 				      bool runnable)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_new *payload = &msg->newt;
 	struct task_struct *parent;
 
@@ -4381,7 +4387,7 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 
 static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_yield *payload = &msg->yield;
 
 	if (__task_deliver_common(rq, p))
@@ -4401,7 +4407,7 @@ static void task_deliver_msg_yield(struct rq *rq, struct task_struct *p)
 static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 				     bool from_switchto, bool was_latched)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_preempt *payload = &msg->preempt;
 
 	if (__task_deliver_common(rq, p))
@@ -4435,7 +4441,7 @@ static void task_deliver_msg_preempt(struct rq *rq, struct task_struct *p,
 
 static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_blocked *payload = &msg->blocked;
 
 	if (__task_deliver_common(rq, p))
@@ -4453,7 +4459,7 @@ static void task_deliver_msg_blocked(struct rq *rq, struct task_struct *p)
 
 static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_dead *payload = &msg->dead;
 
 	if (__task_deliver_common(rq, p))
@@ -4466,7 +4472,7 @@ static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 
 static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_departed *payload = &msg->departed;
 
 	if (__task_deliver_common(rq, p))
@@ -4488,7 +4494,7 @@ static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p)
 static void task_deliver_msg_affinity_changed(struct rq *rq,
 					      struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_affinity_changed *payload =
 		&msg->affinity;
 
@@ -4513,7 +4519,7 @@ static void task_deliver_msg_affinity_changed(struct rq *rq,
 static void task_deliver_msg_priority_changed(struct rq *rq,
 					      struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_priority_changed *payload =
 		&msg->priority;
 
@@ -4532,7 +4538,7 @@ static void task_deliver_msg_priority_changed(struct rq *rq,
 
 static void task_deliver_msg_on_cpu(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_on_cpu *payload = &msg->on_cpu;
 
 	if (__task_deliver_common(rq, p))
@@ -4563,7 +4569,7 @@ static inline bool deferrable_wakeup(struct task_struct *p)
 
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_wakeup *payload = &msg->wakeup;
 
 	if (__task_deliver_common(rq, p))
@@ -4582,7 +4588,7 @@ static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p)
 
 static void task_deliver_msg_switchto(struct rq *rq, struct task_struct *p)
 {
-	struct bpf_ghost_msg *msg = &per_cpu(bpf_ghost_msg, cpu_of(rq));
+	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_task_switchto *payload = &msg->switchto;
 
 	if (__task_deliver_common(rq, p))
@@ -5550,7 +5556,7 @@ out_unlock:
 		 * worry about recursing and clobbering a currently-in-use
 		 * percpu bpf_ghost_msg.
 		 */
-		struct bpf_ghost_msg *msg = this_cpu_ptr(&bpf_ghost_msg);
+		struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 		struct ghost_msg_payload_task_latch_failure *lf =
 			&msg->latch_failure;
 
