@@ -3960,6 +3960,7 @@ static int ghost_config_queue_wakeup(
 	ulong fl;
 	int cpu = -1, i;
 	int ret = 0;
+	int node = -1;
 
 	int qfd, ninfo, flags;
 	struct ghost_agent_wakeup *w;
@@ -4010,9 +4011,15 @@ static int ghost_config_queue_wakeup(
 				ret = -EINVAL;
 				goto out_fput;
 			}
+
+			if (node == -1)
+				node = cpu_to_node(cpu);
 		}
 
-		qn = kzalloc(sizeof(struct queue_notifier), GFP_KERNEL);
+		if (WARN_ON_ONCE(node == -1))
+			node = 0;
+		qn = kzalloc_node(sizeof(struct queue_notifier), GFP_KERNEL,
+				  node);
 		memcpy(qn->winfo, wakeup, sizeof(qn->winfo));
 		qn->wnum = ninfo;
 	}
