@@ -349,7 +349,8 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
  * Note that our caller holds an RQ lock, and we can't safely unlock it, so
  * programs at the attach point can't call ghost_run_gtid().
  */
-static bool ghost_bpf_msg_send(struct ghost_enclave *e,
+static bool ghost_bpf_msg_send(struct task_struct *p,
+			       struct ghost_enclave *e,
 			       struct bpf_ghost_msg *msg)
 {
 	struct bpf_prog *prog;
@@ -364,7 +365,8 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 		return true;
 	}
 
-	msg->pref_cpu = -1; /* may be overwritten by BPF */
+	/* may be overwritten by BPF */
+	msg->pref_cpu = BPF_GHOST_MSG_NO_WAKEUP_PREF;
 
 	/* Program returns 0 if they want us to send the message. */
 	old_target = set_target_enclave(e);
@@ -376,8 +378,16 @@ static bool ghost_bpf_msg_send(struct ghost_enclave *e,
 	restore_target_enclave(old_target);
 	rcu_read_unlock();
 
-	if (msg->pref_cpu != -1)
+	switch (msg->pref_cpu) {
+	case BPF_GHOST_MSG_NO_WAKEUP_PREF:
+		break;
+	case BPF_GHOST_MSG_SKIP_AGENT_WAKE:
+		p->skip_task_msg_seqnum = msg->seqnum;
+		break;
+	default:
 		per_cpu(pref_wakeup_cpu, smp_processor_id()) = msg->pref_cpu;
+		break;
+	}
 
 	return send;
 }
@@ -2841,6 +2851,8 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	p->ghost.status_word = sw;
 	p->ghost.new_task = true;
 
+	p->skip_task_msg_seqnum = 0;
+
 	if (!forked) {
 		ghost_initialize_status_word(p);
 	} else {
@@ -4264,7 +4276,7 @@ static inline int __produce_for_task(struct task_struct *p,
 		WARN(1, "unknown bpg_ghost_msg type %d!\n", msg->type);
 		return -EINVAL;
 	};
-	if (!ghost_bpf_msg_send(p->ghost.enclave, msg))
+	if (!ghost_bpf_msg_send(p, p->ghost.enclave, msg))
 		return -ENOMSG;
 	return _produce(p->ghost.dst_q, barrier, msg->type,
 			payload, payload_size);
@@ -5122,6 +5134,14 @@ static void ghost_wake_agent_on(int cpu)
 
 static void ghost_wake_agent_of(struct task_struct *p)
 {
+	/* Elide the wake */
+	if (!is_agent(task_rq(p), p) &&
+	    p->ghost.status_word &&
+	    task_barrier_get(p) == p->skip_task_msg_seqnum) {
+		p->skip_task_msg_seqnum = 0;
+		return;
+	}
+
 	ghost_wake_agent_on(task_target_cpu(p));
 }
 
@@ -5746,7 +5766,7 @@ out_unlock:
 		 * Discard the return value: we never send this message to
 		 * userspace.
 		 */
-		(void) ghost_bpf_msg_send(this_enclave, msg);
+		(void) ghost_bpf_msg_send(next, this_enclave, msg);
 	}
 
 	if (next_rq != this_rq) {

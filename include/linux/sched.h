@@ -778,6 +778,7 @@ struct task_struct {
 	int64_t gtid;			/* ghost tid */
 	uint inhibit_task_msgs;		/* don't produce msgs for this task */
 	struct list_head inhibited_task_list;
+	uint32_t skip_task_msg_seqnum;	/* skip waking the agent for the given msg */
 	bool bpf_cannot_load_prog;
 	/* For operations with an "implicit" enclave parameter. */
 	struct ghost_enclave *__target_enclave;
