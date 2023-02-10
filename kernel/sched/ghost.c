@@ -5719,8 +5719,8 @@ static int __ghost_run_gtid(gtid_t gtid, u32 task_barrier, int run_flags)
 	}
 
 	if ((run_flags & DO_NOT_PREEMPT) &&
-	    (task_has_ghost_policy(next_rq->curr) ||
-	     next_rq->ghost.latched_task)) {
+	    ((next_rq->curr != next_rq->idle && next_rq->curr != next) ||
+	     (next_rq->ghost.latched_task && next_rq->ghost.latched_task != next))) {
 		ret = -ESTALE;
 		goto out_unlock;
 	}
@@ -6189,7 +6189,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	}
 
 	if (next && (run_flags & DO_NOT_PREEMPT) &&
-	    (task_has_ghost_policy(rq->curr) || rq->ghost.latched_task)) {
+	    ((rq->curr != rq->idle && rq->curr != next) ||
+	      (rq->ghost.latched_task && rq->ghost.latched_task != next))) {
 		state = GHOST_TXN_AGENT_STALE;
 		goto out;
 	}
