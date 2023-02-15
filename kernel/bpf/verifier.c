@@ -12071,6 +12071,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
 	case BPF_PROG_TYPE_GHOST_SCHED:
 	case BPF_PROG_TYPE_GHOST_MSG:
 	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
 		env->bypass_spec_v1 = true;
 		env->bypass_spec_v4 = true;
 		env->allow_ptr_leaks = true;

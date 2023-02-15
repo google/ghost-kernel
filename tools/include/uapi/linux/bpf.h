@@ -212,6 +212,8 @@ enum bpf_prog_type {
 #define BPF_PROG_TYPE_GHOST_MSG 	BPF_PROG_TYPE_GHOST_MSG
 	BPF_PROG_TYPE_GHOST_SELECT_RQ,
 #define BPF_PROG_TYPE_GHOST_SELECT_RQ	BPF_PROG_TYPE_GHOST_SELECT_RQ
+	BPF_PROG_TYPE_GHOST_HALT_POLL,
+#define BPF_PROG_TYPE_GHOST_HALT_POLL	BPF_PROG_TYPE_GHOST_HALT_POLL
 };
 
 enum bpf_attach_type {
@@ -265,6 +267,8 @@ enum {
 #define BPF_GHOST_MSG_SEND	BPF_GHOST_MSG_SEND
 	BPF_GHOST_SELECT_RQ,
 #define BPF_GHOST_SELECT_RQ	BPF_GHOST_SELECT_RQ
+	BPF_GHOST_HALT_POLL,
+#define BPF_GHOST_HALT_POLL	BPF_GHOST_HALT_POLL
 	__MAX_BPF_GHOST_ATTACH_TYPE,
 };
 
@@ -5217,6 +5221,16 @@ struct bpf_ghost_select_rq {
 	__u32 sd_flag;
 	__u32 wake_flags;
 	__u8 skip_ttwu_queue;
+};
+
+enum {
+	BPF_PREPARE_HALT_POLL,
+	BPF_CONTINUE_HALT_POLL,
+	BPF_END_HALT_POLL,
+};
+
+struct bpf_ghost_halt_poll {
+	__u32 type; /* one of the enum BPF_***_HALT_POLL options above */
 };
 
 /*

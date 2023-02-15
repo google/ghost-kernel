@@ -1473,6 +1473,7 @@ struct task_struct {
 #define bpf_ghost_sched_kern bpf_ghost_sched
 #define bpf_ghost_msg_kern bpf_ghost_msg
 #define bpf_ghost_select_rq_kern bpf_ghost_select_rq
+#define bpf_ghost_halt_poll_kern bpf_ghost_halt_poll
 
 struct bpf_prog;
 union bpf_attr;

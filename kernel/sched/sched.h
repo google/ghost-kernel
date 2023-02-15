@@ -219,6 +219,7 @@ struct ghost_enclave {
 	struct bpf_prog *bpf_pnt;
 	struct bpf_prog *bpf_msg_send;
 	struct bpf_prog *bpf_select_rq;
+	struct bpf_prog *bpf_halt_poll;
 #endif
 };
 
@@ -2223,6 +2224,7 @@ struct ghost_abi {
 	void (*commit_greedy_txn)(int cpu);
 	void (*copy_process_epilogue)(struct task_struct *p);
 	void (*cpu_idle)(struct rq *rq);
+	bool (*halt_poll)(struct ghost_enclave *e, int type);
 	void (*timerfd_triggered)(int cpu, uint64_t type, uint64_t cookie);
 	int (*bpf_wake_agent)(int cpu);
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
@@ -2237,6 +2239,10 @@ struct ghost_abi {
 					  const struct bpf_prog *prog,
 					  struct bpf_insn_access_aux *info);
 	bool (*ghost_select_rq_is_valid_access)(
+			int off, int size, enum bpf_access_type type,
+			const struct bpf_prog *prog,
+			struct bpf_insn_access_aux *info);
+	bool (*ghost_halt_poll_is_valid_access)(
 			int off, int size, enum bpf_access_type type,
 			const struct bpf_prog *prog,
 			struct bpf_insn_access_aux *info);
@@ -2345,6 +2351,7 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next);
 void ghost_cpu_idle(void);
+bool ghost_halt_poll(int type);
 
 unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);

@@ -2022,6 +2022,13 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 		default:
 			return -EINVAL;
 		}
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
+		switch ((int)expected_attach_type) {
+		case BPF_GHOST_HALT_POLL:
+			return 0;
+		default:
+			return -EINVAL;
+		}
 	case BPF_PROG_TYPE_EXT:
 		if (expected_attach_type)
 			return -EINVAL;
@@ -2989,6 +2996,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_GHOST_MSG;
 	case BPF_GHOST_SELECT_RQ:
 		return BPF_PROG_TYPE_GHOST_SELECT_RQ;
+	case BPF_GHOST_HALT_POLL:
+		return BPF_PROG_TYPE_GHOST_HALT_POLL;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -4101,6 +4110,7 @@ static int link_create(union bpf_attr *attr)
 	case BPF_PROG_TYPE_GHOST_SCHED:
 	case BPF_PROG_TYPE_GHOST_MSG:
 	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
 		ret = ghost_bpf_link_attach(attr, prog);
 		break;
 #endif

@@ -621,6 +621,24 @@ void ghost_cpu_idle(void)
 		e->abi->cpu_idle(rq);
 }
 
+bool ghost_halt_poll(int type)
+{
+	struct ghost_enclave *e;
+
+	WARN_ON_ONCE(preemptible());
+
+	/*
+	 * rcu_read_lock_sched() not needed; preemption is disabled for the
+	 * entirety of the halt poll.
+	 */
+	e = rcu_dereference_sched(per_cpu(enclave, smp_processor_id()));
+
+	if (e)
+		return e->abi->halt_poll(e, type);
+
+	return true;
+}
+
 unsigned long ghost_cfs_added_load(struct rq *rq)
 {
 	int ghost_nr_running;
@@ -1433,6 +1451,27 @@ const struct bpf_verifier_ops ghost_select_rq_verifier_ops = {
 
 const struct bpf_prog_ops ghost_select_rq_prog_ops = {};
 
+static bool ghost_halt_poll_is_valid_access(int off, int size,
+					    enum bpf_access_type type,
+					    const struct bpf_prog *prog,
+					    struct bpf_insn_access_aux *info)
+{
+	int version = bpf_prog_eat_abi(prog);
+	const struct ghost_abi *abi = ghost_abi_lookup(version);
+
+	if (!abi || !abi->ghost_halt_poll_is_valid_access)
+		return false;
+
+	return abi->ghost_halt_poll_is_valid_access(off, size, type, prog,
+						    info);
+}
+
+const struct bpf_verifier_ops ghost_halt_poll_verifier_ops = {
+	.get_func_proto		= ghost_bpf_func_proto,
+	.is_valid_access	= ghost_halt_poll_is_valid_access,
+};
+
+const struct bpf_prog_ops ghost_halt_poll_prog_ops = {};
 
 int ghost_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {

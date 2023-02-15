@@ -4564,7 +4564,25 @@ unsigned long nr_running(void)
  */
 bool single_task_running(void)
 {
-	return raw_rq()->nr_running == 1;
+	struct rq *rq = raw_rq();
+	int adj_nr_running = rq_adj_nr_running(rq);
+#ifdef CONFIG_SCHED_CLASS_GHOST
+	struct task_struct *curr;
+
+	rcu_read_lock();
+	curr = READ_ONCE(rq->curr);
+	/*
+	 * rq_adj_nr_running() excludes non-agent ghOSt tasks, but for halt
+	 * polling these should be counted. Adding the tasks from
+	 * __ghost_extra_nr_running() isn't correct since a blocked_in_run
+	 * agent is included.
+	 */
+	if (adj_nr_running == 0 && task_has_ghost_policy(curr))
+		return true;
+	rcu_read_unlock();
+#endif
+
+	return adj_nr_running == 1;
 }
 EXPORT_SYMBOL(single_task_running);
 

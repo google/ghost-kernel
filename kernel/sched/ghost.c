@@ -81,6 +81,8 @@ struct ghost_bpf_prog_state {
 		} bpf_msg;
 		struct {
 		} bpf_select_rq;
+		struct {
+		} bpf_halt_poll;
 	};
 };
 static DEFINE_PER_CPU(struct ghost_bpf_prog_state, __ghost_bpf_prog_state);
@@ -459,6 +461,46 @@ static int ghost_bpf_select_rq(struct task_struct *p, int task_cpu,
 	return desired_cpu;
 }
 
+/*
+ * param 'type' determines the type of prog to run and is one of enum options
+ * BPF_PREPARE_HALT_POLL, BPF_CONTINUE_HALT_POLL, or BPF_END_HALT_POLL.
+ *
+ * Return true if the busy polling task should be preempted, else return false.
+ */
+static bool ghost_bpf_halt_poll(struct ghost_enclave *e, int type)
+{
+	struct bpf_ghost_halt_poll_kern ctx[1];
+	struct bpf_prog *prog;
+	struct ghost_bpf_prog_state old_state, *ps;
+	struct ghost_enclave *old_target;
+	bool ret;
+
+	rcu_read_lock();
+	prog = rcu_dereference(e->bpf_halt_poll);
+	if (!prog) {
+		rcu_read_unlock();
+		return true; /* default behavior is no halt polling */
+	}
+	/* Zero the struct to avoid leaking stack data in struct padding */
+	memset(ctx, 0, sizeof(struct bpf_ghost_halt_poll_kern));
+
+	ctx->type = type;
+
+	old_target = set_target_enclave(e);
+	save_prog_state(&old_state);
+	ps = get_prog_state();
+
+	ps->prog_type = BPF_PROG_TYPE_GHOST_HALT_POLL;
+	ret = BPF_PROG_RUN(prog, ctx);
+
+	restore_prog_state(&old_state);
+	restore_target_enclave(old_target);
+
+	rcu_read_unlock();
+
+	return ret;
+}
+
 #else
 
 static inline void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
@@ -478,6 +520,11 @@ static inline int ghost_bpf_select_rq(struct task_struct *p, int task_cpu,
 				      int wake_flags)
 {
 	return task_cpu;
+}
+
+static inline bool ghost_bpf_halt_poll(struct ghost_enclave *e, int type)
+{
+	return true;
 }
 
 #endif	/* CONFIG_BPF */
@@ -8582,6 +8629,19 @@ static bool ghost_select_rq_is_valid_access(int off, int size,
 	return true;
 }
 
+static bool ghost_halt_poll_is_valid_access(int off, int size,
+					    enum bpf_access_type type,
+					    const struct bpf_prog *prog,
+					    struct bpf_insn_access_aux *info)
+{
+	/* The verifier guarantees that size > 0. */
+	if (off < 0 || off + size > sizeof(struct bpf_ghost_halt_poll) ||
+	    off % size)
+		return false;
+
+	return true;
+}
+
 static int ghost_sched_pnt_attach(struct ghost_enclave *e,
 				  struct bpf_prog *prog)
 {
@@ -8657,6 +8717,31 @@ static void ghost_select_rq_detach(struct ghost_enclave *e,
 	spin_unlock_irqrestore(&e->lock, irq_fl);
 }
 
+static int ghost_halt_poll_attach(struct ghost_enclave *e,
+				  struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	if (e->bpf_halt_poll) {
+		spin_unlock_irqrestore(&e->lock, irq_fl);
+		return -EBUSY;
+	}
+	rcu_assign_pointer(e->bpf_halt_poll, prog);
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+	return 0;
+}
+
+static void ghost_halt_poll_detach(struct ghost_enclave *e,
+				   struct bpf_prog *prog)
+{
+	unsigned long irq_fl;
+
+	spin_lock_irqsave(&e->lock, irq_fl);
+	rcu_replace_pointer(e->bpf_halt_poll, NULL, lockdep_is_held(&e->lock));
+	spin_unlock_irqrestore(&e->lock, irq_fl);
+}
+
 static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 			   int prog_type, int attach_type)
 {
@@ -8669,7 +8754,8 @@ static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 			err = ghost_sched_pnt_attach(e, prog);
 			break;
 		default:
-			pr_warn("bad sched bpf attach_type %d", attach_type);
+			pr_warn("bad bpf attach_type %d (prog type %d)",
+				attach_type, prog_type);
 			err = -EINVAL;
 			break;
 		}
@@ -8680,7 +8766,8 @@ static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 			err = ghost_msg_send_attach(e, prog);
 			break;
 		default:
-			pr_warn("bad msg bpf attach_type %d", attach_type);
+			pr_warn("bad bpf attach_type %d (prog type %d)",
+				attach_type, prog_type);
 			err = -EINVAL;
 			break;
 		}
@@ -8691,7 +8778,20 @@ static int bpf_link_attach(struct ghost_enclave *e, struct bpf_prog *prog,
 			err = ghost_select_rq_attach(e, prog);
 			break;
 		default:
-			pr_warn("bad msg bpf attach_type %d", attach_type);
+			pr_warn("bad bpf attach_type %d (prog type %d)",
+				attach_type, prog_type);
+			err = -EINVAL;
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
+		switch (attach_type) {
+		case BPF_GHOST_HALT_POLL:
+			err = ghost_halt_poll_attach(e, prog);
+			break;
+		default:
+			pr_warn("bad bpf attach_type %d (prog type %d)",
+				attach_type, prog_type);
 			err = -EINVAL;
 			break;
 		}
@@ -8734,6 +8834,17 @@ static void bpf_link_detach(struct ghost_enclave *e, struct bpf_prog *prog,
 		switch (attach_type) {
 		case BPF_GHOST_SELECT_RQ:
 			ghost_select_rq_detach(e, prog);
+			break;
+		default:
+			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
+				  e->id, prog_type, attach_type);
+			break;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
+		switch (attach_type) {
+		case BPF_GHOST_HALT_POLL:
+			ghost_halt_poll_detach(e, prog);
 			break;
 		default:
 			WARN_ONCE(1, "enclave %lu: unexpected bpf prog %d/%d",
@@ -8813,6 +8924,14 @@ static int _ghost_bpf_link_attach(const union bpf_attr *attr,
 	case BPF_PROG_TYPE_GHOST_SELECT_RQ:
 		switch (ea_type) {
 		case BPF_GHOST_SELECT_RQ:
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case BPF_PROG_TYPE_GHOST_HALT_POLL:
+		switch (ea_type) {
+		case BPF_GHOST_HALT_POLL:
 			break;
 		default:
 			return -EINVAL;
@@ -8899,6 +9018,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.commit_greedy_txn = _commit_greedy_txn,
 	.copy_process_epilogue = ghost_initialize_status_word,
 	.cpu_idle = cpu_idle,
+	.halt_poll = ghost_bpf_halt_poll,
 	.timerfd_triggered = _ghost_timerfd_triggered,
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
@@ -8906,6 +9026,7 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.ghost_sched_is_valid_access = ghost_sched_is_valid_access,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.ghost_select_rq_is_valid_access = ghost_select_rq_is_valid_access,
+	.ghost_halt_poll_is_valid_access = ghost_halt_poll_is_valid_access,
 	.bpf_link_attach = _ghost_bpf_link_attach,
 
 	/* ghost_agent_sched_class callbacks */
