@@ -5250,6 +5250,4 @@ enum {
 	BTF_F_ZERO	=	(1ULL << 3),
 };
 
-#define GHOST_BPF
-
 #endif /* _UAPI__LINUX_BPF_H__ */
