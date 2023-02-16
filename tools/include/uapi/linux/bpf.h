@@ -5224,9 +5224,9 @@ struct bpf_ghost_select_rq {
 };
 
 enum {
-	BPF_PREPARE_HALT_POLL,
-	BPF_CONTINUE_HALT_POLL,
-	BPF_END_HALT_POLL,
+	GHOST_PREPARE_HALT_POLL,
+	GHOST_CONTINUE_HALT_POLL,
+	GHOST_END_HALT_POLL,
 };
 
 struct bpf_ghost_halt_poll {

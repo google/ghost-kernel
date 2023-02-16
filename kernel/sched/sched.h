@@ -2351,6 +2351,12 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
 			       struct task_struct *next);
 void ghost_cpu_idle(void);
+
+enum {
+	GHOST_PREPARE_HALT_POLL,
+	GHOST_CONTINUE_HALT_POLL,
+	GHOST_END_HALT_POLL,
+};
 bool ghost_halt_poll(int type);
 
 unsigned long ghost_cfs_added_load(struct rq *rq);
