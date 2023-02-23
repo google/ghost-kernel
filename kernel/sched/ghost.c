@@ -1210,16 +1210,19 @@ static int _balance_ghost(struct rq *rq, struct task_struct *prev,
 static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 {
 	int waker_cpu = smp_processor_id();
-	int desired_cpu;
+	int desired_cpu = -1;
 
+	/* If BPF picks a cpu, we must honor it. */
 	desired_cpu = ghost_bpf_select_rq(p, cpu, waker_cpu, wake_flags & 0xF,
 					  wake_flags);
 	if (desired_cpu >= 0)
-		return desired_cpu;
+		goto out;
 
 	/* For anything but wake ups, just return the callers' preferred cpu */
-	if (!(wake_flags & (WF_TTWU | WF_FORK)))
-		return cpu;
+	if (!(wake_flags & (WF_TTWU | WF_FORK))) {
+		desired_cpu = cpu;
+		goto out;
+	}
 
 	/*
 	 * We have at least a couple of obvious choices here:
@@ -1243,14 +1246,16 @@ static int _select_task_rq_ghost(struct task_struct *p, int cpu, int wake_flags)
 	 * and the default is to keep the task on the same CPU it last ran on.
 	 */
 	if (READ_ONCE(p->ghost.enclave->wake_on_waker_cpu))
-		p->ghost.twi.wake_up_cpu = waker_cpu;
+		desired_cpu = waker_cpu;
 	else
-		p->ghost.twi.wake_up_cpu = cpu;
+		desired_cpu = cpu;
 
+out:
+	p->ghost.twi.wake_up_cpu = desired_cpu;
 	p->ghost.twi.waker_cpu = waker_cpu;
 	p->ghost.twi.last_ran_cpu = cpu;
 
-	return p->ghost.twi.wake_up_cpu;
+	return desired_cpu;
 }
 
 static inline bool task_is_dead(struct rq *rq, struct task_struct *p)
