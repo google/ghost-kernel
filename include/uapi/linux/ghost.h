@@ -32,7 +32,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	87
+#define GHOST_VERSION	88
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -303,6 +303,7 @@ struct ghost_msg_payload_task_new {
 	uint16_t runnable;
 	int nice;		/* task priority in nice value [-20, 19]. */
 	struct ghost_sw_info sw_info;
+	uint64_t agent_data;	/* used by bpf */
 };
 
 struct ghost_msg_payload_task_preempt {

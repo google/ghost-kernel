@@ -4566,6 +4566,7 @@ static void task_deliver_msg_task_new(struct rq *rq, struct task_struct *p,
 		WARN(1, "New task PID %d didn't have a status word!", p->pid);
 		return;
 	}
+	payload->agent_data = 0;
 
 	produce_for_task(p, msg);
 }
