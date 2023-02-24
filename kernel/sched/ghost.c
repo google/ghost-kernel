@@ -2761,8 +2761,24 @@ static void ghost_initialize_status_word(struct task_struct *p)
 		return;
 
 	sw->gtid = gtid_of(p);
-	sw->barrier = 0;
 	sw->runtime = 0;
+
+	/*
+	 * We need to start again from the previous barrier if the task
+	 * left and rejoined ghost, since otherwise we could have the
+	 * following:
+	 * - task departs ghost with seqnum = 1, messages become inhibited
+	 * - task rejoins ghost, new status word allocated with seqnum = 0
+	 * - MSG_TASK_NEW is inhibited, but seqnum is bumped to 1
+	 * - agent re-associates task with new queue, which succeeds because
+	 *   the agent supplies task_barrier = 1
+	 * - agent consumes the old departed message, so messages are
+	 *   uninhibited and the task_new we skipped above is produced
+	 * - agent observes the task_new goes to a queue other than the
+	 *   default queue, since it successfully reassociated the task while
+	 *   it was in inhibited limbo
+	 */
+	sw->barrier = p->ghost_prev_barrier;
 
 	/*
 	 * Order is important to ensure that agent observes a fully formed
@@ -2862,6 +2878,7 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	if (!forked) {
 		ghost_initialize_status_word(p);
 	} else {
+		p->ghost_prev_barrier = 0;
 		/*
 		 * Caller will initialize status_word after allocating gtid
 		 * (see copy_process).
@@ -4845,6 +4862,7 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 			WARN_ON_ONCE(!list_empty(&p->inhibited_task_list));
 			list_add_tail(&p->inhibited_task_list,
 				      &e->inhibited_task_list);
+			p->ghost_prev_barrier = barrier_get(p);
 		}
 	} else {
 		/*

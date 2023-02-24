@@ -783,6 +783,12 @@ struct task_struct {
 	/* For operations with an "implicit" enclave parameter. */
 	struct ghost_enclave *__target_enclave;
 	struct sched_ghost_entity ghost;
+	/*
+	 * If the task was previously in ghost, this was its final barrier.
+	 * We can't put this in the ghost entity, because that gets memset
+	 * as a part of preparing the task for entry to ghost.
+	 */
+	uint32_t ghost_prev_barrier;
 #endif
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
