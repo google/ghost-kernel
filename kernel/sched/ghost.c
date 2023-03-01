@@ -3206,6 +3206,17 @@ static int ghost_prep_agent(struct ghost_enclave *e, struct task_struct *p,
 	ghost_sw_set_flag(p->ghost.status_word, GHOST_SW_TASK_IS_AGENT);
 
 	/*
+	 * The status word should be 0; the clear is out of paranoia.
+	 * The main thing is that we need to reset the per-cpu cpu_available
+	 * field, since in the case that it is currently set, we will
+	 * incorrectly elide the sw availability update in
+	 * handle_cpu_availability, since the cached per-cpu state doesn't
+	 * actually match the status word state.
+	 */
+	ghost_sw_clear_flag(p->ghost.status_word, GHOST_SW_CPU_AVAIL);
+	per_cpu(cpu_available, cpu_of(rq)) = 0;
+
+	/*
 	 * The agent is not in the ghost class yet, but it will be before the RQ
 	 * lock is unlocked.
 	 *
