@@ -600,6 +600,11 @@ struct sched_ghost_entity {
 	/* See ghost_destroy_enclave() */
 	int __agent_free_cpu_cmd;
 
+	/* cpu chosen by BPF to wake up to respond to a newly produced message */
+	int msg_override_cpu;
+	/* seqnum for the msg that set msg_pref_cpu */
+	uint32_t msg_override_seqnum;
+
 	/*
 	 * See also ghost_prepare_task_switch() and ghost_deferred_msgs()
 	 * for flags that are used to defer messages.
@@ -778,7 +783,6 @@ struct task_struct {
 	int64_t gtid;			/* ghost tid */
 	uint inhibit_task_msgs;		/* don't produce msgs for this task */
 	struct list_head inhibited_task_list;
-	uint32_t skip_task_msg_seqnum;	/* skip waking the agent for the given msg */
 	bool bpf_cannot_load_prog;
 	/* For operations with an "implicit" enclave parameter. */
 	struct ghost_enclave *__target_enclave;

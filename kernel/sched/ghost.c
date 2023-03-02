@@ -52,14 +52,6 @@ static struct bpf_ghost_msg *this_cpu_ghost_msg(void)
 }
 
 /*
- * Caches the preferred cpu to wake up in response to a ghost message
- * being generated. This is used like TLS for the current thread; we only
- * ever read and modify the per-cpu entry for the current cpu, while in
- * preempt-disabled regions.
- */
-static DEFINE_PER_CPU(int, pref_wakeup_cpu);
-
-/*
  * Used from bpf helpers to determine our caller's state, e.g. "are we in
  * bpf-pnt?  if so, what are the rq flags?".
  *
@@ -379,15 +371,9 @@ static bool ghost_bpf_msg_send(struct task_struct *p,
 	restore_target_enclave(old_target);
 	rcu_read_unlock();
 
-	switch (msg->pref_cpu) {
-	case BPF_GHOST_MSG_NO_WAKEUP_PREF:
-		break;
-	case BPF_GHOST_MSG_SKIP_AGENT_WAKE:
-		p->skip_task_msg_seqnum = msg->seqnum;
-		break;
-	default:
-		per_cpu(pref_wakeup_cpu, smp_processor_id()) = msg->pref_cpu;
-		break;
+	if (msg->pref_cpu != BPF_GHOST_MSG_NO_WAKEUP_PREF) {
+		p->ghost.msg_override_cpu = msg->pref_cpu;
+		p->ghost.msg_override_seqnum = msg->seqnum;
 	}
 
 	return send;
@@ -2172,8 +2158,6 @@ static void ___enclave_add_cpu(struct ghost_enclave *e, int cpu)
 
 	cpumask_set_cpu(cpu, &e->cpus);
 	rcu_assign_pointer(per_cpu(ghost_txn, cpu), txn);
-
-	per_cpu(pref_wakeup_cpu, cpu) = -1;
 }
 
 /*
@@ -2873,7 +2857,8 @@ static int __ghost_prep_task(struct ghost_enclave *e, struct task_struct *p,
 	p->ghost.status_word = sw;
 	p->ghost.new_task = true;
 
-	p->skip_task_msg_seqnum = 0;
+	p->ghost.msg_override_cpu = BPF_GHOST_MSG_NO_WAKEUP_PREF;
+	p->ghost.msg_override_seqnum = 0;
 
 	if (!forked) {
 		ghost_initialize_status_word(p);
@@ -3900,6 +3885,55 @@ err_newq:
 	return error;
 }
 
+static inline bool check_same_enclave(int cpu1, int cpu2)
+{
+	const struct ghost_enclave *e1, *e2;
+
+	VM_BUG_ON(preemptible());
+
+	e1 = rcu_dereference_sched(per_cpu(enclave, cpu1));
+	e2 = rcu_dereference_sched(per_cpu(enclave, cpu2));
+
+	return (e1 && e2 && e1 == e2);
+}
+
+static int override_target_cpu(struct task_struct *p)
+{
+	int override = p->ghost.msg_override_cpu;
+
+	if (WARN_ON_ONCE(!p->ghost.status_word))
+		return BPF_GHOST_MSG_NO_WAKEUP_PREF;
+
+	if (override != BPF_GHOST_MSG_NO_WAKEUP_PREF) {
+		p->ghost.msg_override_cpu = BPF_GHOST_MSG_NO_WAKEUP_PREF;
+		/*
+		 * If a new message was produced after we set the override cpu,
+		 * but before we woke anything up, we have to ignore the
+		 * original override cpu, since it doesn't apply to the latest
+		 * message.
+		 * For agents, this can happen easily since agents may have
+		 * their barrier locklessly incremented after message production
+		 * (ie. __ghost_wake_agent_on),
+		 * For tasks, they may not always request an agent wakeup
+		 * immediately after message production.
+		 */
+		if (barrier_get(p) != p->ghost.msg_override_seqnum)
+			return BPF_GHOST_MSG_NO_WAKEUP_PREF;
+	}
+
+	if (override >= 0) {
+		if (unlikely(override >= nr_cpu_ids ||
+			     !cpu_online(override)))
+			return BPF_GHOST_MSG_NO_WAKEUP_PREF;
+
+		if (unlikely(!check_same_enclave(override, task_cpu(p))))
+			return BPF_GHOST_MSG_NO_WAKEUP_PREF;
+
+	}
+
+	return override;
+}
+
 /*
  * Resolve the target CPU associated with a ghost_queue.
  *
@@ -3912,13 +3946,30 @@ err_newq:
  * Returns the CPU of the ghost agent to wakeup or -1 if an eligible
  * CPU is not found or configured.
  */
-static int target_cpu(struct ghost_queue *q, int preferred_cpu)
+static int target_cpu(struct task_struct *p, struct ghost_queue *q,
+		      int preferred_cpu)
 {
 	struct queue_notifier *notifier;
-	int cpu = -1, i;
+	int cpu = -1, i, override_cpu;
 
 	if (unlikely(!q))
 		return -1;
+
+	override_cpu = override_target_cpu(p);
+	switch (override_cpu) {
+	case BPF_GHOST_MSG_NO_WAKEUP_PREF:
+		break;
+	case BPF_GHOST_MSG_SKIP_AGENT_WAKE:
+		/* Elide the wake */
+		return -1;
+	default:
+		/*
+		 * BPF overrode us to wake a specific cpu.
+		 * That cpu may be outside the notifier for the
+		 * task's associated queue, but that's ok.
+		 */
+		return override_cpu;
+	}
 
 	rcu_read_lock();
 	notifier = rcu_dereference(q->notifier);
@@ -3945,30 +3996,6 @@ static int target_cpu(struct ghost_queue *q, int preferred_cpu)
 	return cpu;
 }
 
-/*
- * Called right after we've generated a message. This returns a preferred
- * cpu to wake up (chosen by BPF).
- *
- * It is expected that we've remain preempt-disabled since the time the message
- * was generated, to avoid any clobbering of `pref_wakeup_cpu`.
- */
-static int preferred_target_cpu(int fallback_cpu)
-{
-	int this_cpu = smp_processor_id();
-	int pref = per_cpu(pref_wakeup_cpu, this_cpu);
-
-	if (pref == -1)
-		return fallback_cpu;
-
-	/* reset */
-	per_cpu(pref_wakeup_cpu, this_cpu) = -1;
-
-	if (unlikely(pref < 0 || pref >= nr_cpu_ids || !cpu_online(pref)))
-		return fallback_cpu;
-
-	return pref;
-}
-
 static int task_target_cpu(struct task_struct *p)
 {
 	struct rq *rq = task_rq(p);
@@ -3982,7 +4009,7 @@ static int task_target_cpu(struct task_struct *p)
 	if (unlikely(p->ghost.agent))
 		return -1;
 
-	return target_cpu(p->ghost.dst_q, preferred_target_cpu(task_cpu(p)));
+	return target_cpu(p, p->ghost.dst_q, task_cpu(p));
 }
 
 static int agent_target_cpu(struct rq *rq)
@@ -3992,8 +4019,7 @@ static int agent_target_cpu(struct rq *rq)
 	lockdep_assert_held(&rq->lock);
 	VM_BUG_ON(!is_agent(rq, agent));
 
-	return target_cpu(agent->ghost.dst_q,
-			  preferred_target_cpu(task_cpu(agent)));
+	return target_cpu(agent, agent->ghost.dst_q, task_cpu(agent));
 }
 
 static int ghost_config_queue_wakeup(
@@ -5171,14 +5197,6 @@ static void ghost_wake_agent_on(int cpu)
 
 static void ghost_wake_agent_of(struct task_struct *p)
 {
-	/* Elide the wake */
-	if (!is_agent(task_rq(p), p) &&
-	    p->ghost.status_word &&
-	    task_barrier_get(p) == p->skip_task_msg_seqnum) {
-		p->skip_task_msg_seqnum = 0;
-		return;
-	}
-
 	ghost_wake_agent_on(task_target_cpu(p));
 }
 
@@ -5408,18 +5426,6 @@ static inline bool commit_flags_valid(int commit_flags, int valid_commit_flags)
 		return false;
 
 	return true;
-}
-
-static inline bool check_same_enclave(int cpu1, int cpu2)
-{
-	const struct ghost_enclave *e1, *e2;
-
-	VM_BUG_ON(preemptible());
-
-	e1 = rcu_dereference_sched(per_cpu(enclave, cpu1));
-	e2 = rcu_dereference_sched(per_cpu(enclave, cpu2));
-
-	return (e1 && e2 && e1 == e2);
 }
 
 /*
