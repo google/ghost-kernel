@@ -32,7 +32,7 @@
  * process are the same version as each other. Each successive version changes
  * values in this header file, assumptions about operations in the kernel, etc.
  */
-#define GHOST_VERSION	88
+#define GHOST_VERSION	89
 
 /*
  * Define SCHED_GHOST via the ghost uapi unless it has already been defined
@@ -335,6 +335,7 @@ struct ghost_msg_payload_task_blocked {
 
 struct ghost_msg_payload_task_dead {
 	uint64_t gtid;
+	int cpu;
 };
 
 struct ghost_msg_payload_task_departed {

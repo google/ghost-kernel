@@ -4664,6 +4664,7 @@ static bool task_deliver_msg_dead(struct rq *rq, struct task_struct *p)
 
 	msg->type = MSG_TASK_DEAD;
 	payload->gtid = gtid_of(p);
+	payload->cpu = cpu_of(rq);
 	return produce_for_task(p, msg) == 0;
 }
 
