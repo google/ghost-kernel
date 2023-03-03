@@ -144,7 +144,7 @@ static void task_deliver_msg_priority_changed(struct rq *rq,
 static bool task_deliver_msg_departed(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_wakeup(struct rq *rq, struct task_struct *p);
 static void task_deliver_msg_on_cpu(struct rq *rq, struct task_struct *p);
-static bool cpu_deliver_msg_tick(struct rq *rq);
+static bool cpu_deliver_msg_tick(struct rq *rq, struct task_struct *p);
 static inline bool cpu_deliver_msg_cpu_available(struct rq *rq);
 static inline bool cpu_deliver_msg_cpu_busy(struct rq *rq);
 static inline bool cpu_deliver_msg_agent_blocked(struct rq *rq);
@@ -1157,7 +1157,7 @@ static void _task_tick_ghost(struct rq *rq, struct task_struct *p, int queued)
 
 	__update_curr_ghost(rq, false);
 
-	if (cpu_deliver_msg_tick(rq))
+	if (cpu_deliver_msg_tick(rq, p))
 		ghost_wake_agent_on(agent_target_cpu(rq));
 }
 
@@ -4382,7 +4382,7 @@ static inline bool cpu_skip_message(struct rq *rq)
 	return false;
 }
 
-static inline bool cpu_deliver_msg_tick(struct rq *rq)
+static inline bool cpu_deliver_msg_tick(struct rq *rq, struct task_struct *p)
 {
 	struct bpf_ghost_msg *msg = this_cpu_ghost_msg();
 	struct ghost_msg_payload_cpu_tick *payload = &msg->cpu_tick;
@@ -4394,6 +4394,7 @@ static inline bool cpu_deliver_msg_tick(struct rq *rq)
 
 	msg->type = MSG_CPU_TICK;
 	payload->cpu = cpu_of(rq);
+	payload->is_agent = is_agent(rq, p);
 
 	return !produce_for_agent(rq, msg);
 }
