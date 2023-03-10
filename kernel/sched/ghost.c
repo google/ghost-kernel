@@ -6161,7 +6161,23 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 			goto out;
 		}
 
-		rq = task_rq_lock(next, &rf);
+		/*
+		 * We can't directly use task_rq_lock(), since we don't know
+		 * for sure if we can take pi_lock here. The following could
+		 * produce a deadlock:
+		 * - remote cpu processing __try_to_wake_up(next), already taken
+		 *   next->pi_lock, and is now waiting for next->on_cpu to be 0
+		 * - local cpu is in __schedule(), and next is currently on cpu
+		 * The local cpu could be in __schedule if e.g. we are doing a
+		 * COMMIT_AT_SCHEDULE or a commit from BPF.
+		 */
+		if (unlikely(!raw_spin_trylock_irqsave(&next->pi_lock, rf.flags))) {
+			rcu_read_unlock();
+			state = GHOST_TXN_TARGET_STALE;
+			goto out;
+		}
+		rq = __task_rq_lock(next, &rf);
+
 		e = rcu_dereference(per_cpu(enclave, run_cpu));
 		if (validate_next_task(e, rq, next, txn->task_barrier,
 				       &state)) {
