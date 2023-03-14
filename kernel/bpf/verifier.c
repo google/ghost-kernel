@@ -12031,7 +12031,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
 		env->bypass_spec_v1 = true;
 		env->bypass_spec_v4 = true;
 		env->allow_ptr_leaks = true;
-		env->allow_uninit_stack = true;
 		env->allow_ptr_to_map_access = true;
 		break;
 	default:
