@@ -4785,6 +4785,9 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		if (!task_deliver_msg_departed(rq, p)) {
 			free_status_word_locked(e, p->ghost.status_word);
 		} else {
+			/* msg delivered so wake the agent */
+			ghost_wake_agent_of(p);
+
 			/*
 			 * Inhibit all msgs produced by this task until the
 			 * agent acknowledges receipt of TASK_DEPARTED msg
@@ -4838,8 +4841,26 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 		 * a sign that the agent fully exited, and then it destroys the
 		 * SW.
 		 */
-		if (!task_deliver_msg_dead(rq, p) && !is_agent(rq, p))
+		if (task_deliver_msg_dead(rq, p)) {
+			/*
+			 * MSG_TASK_DEAD successfully produced into the queue
+			 * so wake the agent to handle it.
+			 */
+			ghost_wake_agent_of(p);
+		} else if (!is_agent(rq, p)) {
+			/*
+			 * We could not produce a MSG_TASK_DEAD for a normal
+			 * ghost task (or perhaps BPF squelched it) so just
+			 * free the status_word directly here.
+			 */
 			free_status_word_locked(e, p->ghost.status_word);
+		} else {
+			/*
+			 * We did not produce MSG_TASK_DEAD but this is an
+			 * agent task so leave it alone for userspace to
+			 * detect the agent is dead.
+			 */
+		}
 	}
 
 	/* status_word is off-limits to the kernel */
@@ -4915,8 +4936,6 @@ static void release_from_ghost(struct rq *rq, struct task_struct *p)
 	p->ghost.enclave = NULL;
 
 	spin_unlock_irqrestore(&e->lock, flags);
-
-	ghost_wake_agent_of(p);
 
 	/* Release reference to 'dst_q' */
 	if (p->ghost.dst_q) {
