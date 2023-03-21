@@ -6804,6 +6804,7 @@ static int ghost_sync_group(struct ghost_enclave *e,
 	ret = get_user_cpu_mask(user_mask_ptr, user_mask_len, cpumask);
 	if (ret)
 		goto out;
+	cpumask_and(cpumask, cpumask, cpu_possible_mask);
 
 	preempt_disable();
 
@@ -6859,6 +6860,7 @@ static int ioctl_ghost_commit_txn(struct ghost_enclave *e,
 		free_cpumask_var(cpumask);
 		return error;
 	}
+	cpumask_and(cpumask, cpumask, cpu_possible_mask);
 
 	if (!zalloc_cpumask_var(&ipimask, GFP_KERNEL)) {
 		free_cpumask_var(cpumask);
