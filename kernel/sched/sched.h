@@ -2174,6 +2174,9 @@ static inline bool ghost_need_rendezvous(struct rq *rq)
 static inline bool skip_fair_idle_balance(struct cfs_rq *cfs_rq,
 					  struct task_struct *prev)
 {
+	if (!static_branch_likely(&ghost_active))
+		return false;
+
 	/*
 	 * Skip fair idle balance iff:
 	 * - there are no runnable CFS tasks on this cpu.
