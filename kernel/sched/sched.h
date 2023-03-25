@@ -2161,6 +2161,9 @@ static inline bool ghost_need_rendezvous(struct rq *rq)
 {
 	int64_t r;
 
+	if (!static_branch_likely(&ghost_active))
+		return false;
+
 	if (!ghost_class(rq->curr->sched_class))
 		return false;
 
