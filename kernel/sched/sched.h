@@ -2579,6 +2579,9 @@ static inline int __ghost_extra_nr_running(struct rq *rq)
 #ifdef CONFIG_SCHED_CLASS_GHOST
 	int agent_active = 0;
 
+	if (!static_branch_likely(&ghost_active))
+		return 0;
+
 	/*
 	 * Normal ghost tasks or a 'blocked_in_run' agent are treated as
 	 * "extra" tasks and effectively hidden from a load balancing
