@@ -771,8 +771,10 @@ void ghost_copy_process_epilogue(struct task_struct *p)
 /*
  * Called from the timer tick handler after dropping rq->lock.  Called
  * regardless of whether a ghost task is current or not.
+ *
+ * Expected to be called from the ghost_tick() wrapper.
  */
-void ghost_tick(struct rq *rq)
+void __ghost_tick(struct rq *rq)
 {
 	struct ghost_enclave *e;
 

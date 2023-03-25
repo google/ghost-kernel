@@ -2185,6 +2185,16 @@ static inline bool skip_fair_idle_balance(struct cfs_rq *cfs_rq,
 		return false;
 }
 
+static inline void ghost_tick(struct rq *rq)
+{
+	extern void __ghost_tick(struct rq *rq);
+
+	if (!static_branch_likely(&ghost_active))
+		return;
+
+	__ghost_tick(rq);
+}
+
 /* ghost tid */
 typedef int64_t gtid_t;
 
@@ -2333,7 +2343,6 @@ int64_t ghost_sync_group_cookie(void);
 void ghost_wait_for_rendezvous(struct rq *rq);
 void ghost_pnt_prologue(struct rq *rq, struct task_struct *prev,
 			struct rq_flags *rf);
-void ghost_tick(struct rq *rq);
 
 int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 		       const struct sched_attr *attr,
