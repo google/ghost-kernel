@@ -2195,6 +2195,20 @@ static inline void ghost_tick(struct rq *rq)
 	__ghost_tick(rq);
 }
 
+static inline void ghost_prepare_task_switch(struct rq *rq,
+					     struct task_struct *prev,
+					     struct task_struct *next)
+{
+	extern void __ghost_prepare_task_switch(struct rq *rq,
+						struct task_struct *prev,
+						struct task_struct *next);
+
+	if (!static_branch_likely(&ghost_active))
+		return;
+
+	__ghost_prepare_task_switch(rq, prev, next);
+}
+
 /* ghost tid */
 typedef int64_t gtid_t;
 
@@ -2357,8 +2371,6 @@ static inline int enclave_abi(const struct ghost_enclave *e)
 	return e->abi->version;
 }
 
-void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
-			       struct task_struct *next);
 void ghost_cpu_idle(void);
 
 enum {

@@ -595,8 +595,9 @@ int ghost_setscheduler(struct task_struct *p, struct rq *rq,
 	return e->abi->setscheduler(e, p, rq, attr, reset_on_fork);
 }
 
-void ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
-			       struct task_struct *next)
+/* Expected to be called from the ghost_prepare_task_switch() wrapper */
+void __ghost_prepare_task_switch(struct rq *rq, struct task_struct *prev,
+				 struct task_struct *next)
 {
 	struct ghost_enclave *e = _ghost_resolve_enclave(rq, prev);
 
