@@ -652,7 +652,6 @@ struct __kernel_timerfd_ghost {
 	uint64_t cookie;
 };
 
-extern void ghost_commit_greedy_txn(void);
 extern void ghost_timerfd_triggered(struct __kernel_timerfd_ghost *timer);
 extern void ghost_do_exit(struct task_struct *tsk, bool group_dead);
 

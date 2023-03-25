@@ -844,13 +844,11 @@ void ghost_sched_cleanup_fork(struct task_struct *p)
 	e->abi->cleanup_fork(e, p);
 }
 
-void ghost_commit_greedy_txn(void)
+/* Expected to be called from the ghost_commit_greedy_txn() wrapper */
+void __ghost_commit_greedy_txn(void)
 {
 	struct ghost_enclave *e;
 	int cpu;
-
-	if (!static_branch_likely(&ghost_active))
-		return;
 
 	cpu = get_cpu();
 

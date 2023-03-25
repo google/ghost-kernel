@@ -95,7 +95,21 @@ static __always_inline bool __preempt_count_dec_and_test(void)
 }
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-extern void ghost_commit_greedy_txn(void);
+/*
+ * XXX externally visible ghost functions should be defined in <linux/sched.h>
+ * but we cannot include it here because it creates a circular dependency so
+ * live with this.
+ */
+DECLARE_STATIC_KEY_FALSE(ghost_active);
+static __always_inline void ghost_commit_greedy_txn(void)
+{
+	extern void __ghost_commit_greedy_txn(void);
+
+	if (!static_branch_likely(&ghost_active))
+		return;
+
+	__ghost_commit_greedy_txn();
+}
 #endif
 
 /*
