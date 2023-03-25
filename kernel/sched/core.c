@@ -5109,20 +5109,22 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	bool ghost_can_pnt = false;
 
 #ifdef CONFIG_SCHED_CLASS_GHOST
-	ghost_pnt_prologue(rq, prev, rf);
-	/*
-	 * Disable the CFS optimization if ghost is active on this cpu, even if
-	 * the agent is not on_rq.  If the agent is on_rq, and possibly
-	 * blocked_in_run, then nr_running > cfs.h_nr_running, and the
-	 * optimization would be disabled anyways.
-	 *
-	 * If the agent is on_rq and blocked_in_run, running PNT-F would be OK
-	 * (we'd have to change the nr_running check), but running the idle
-	 * class if PNT-F fails would *not* be OK.  There could be a latched
-	 * task, and that task could currently belong to another RQ and not
-	 * contribute to rq->nr_running.
-	 */
-	ghost_can_pnt = !!rq->ghost.agent;
+	if (static_branch_likely(&ghost_active)) {
+		ghost_pnt_prologue(rq, prev, rf);
+		/*
+		 * Disable the CFS optimization if ghost is active on this cpu, even if
+		 * the agent is not on_rq.  If the agent is on_rq, and possibly
+		 * blocked_in_run, then nr_running > cfs.h_nr_running, and the
+		 * optimization would be disabled anyways.
+		 *
+		 * If the agent is on_rq and blocked_in_run, running PNT-F would be OK
+		 * (we'd have to change the nr_running check), but running the idle
+		 * class if PNT-F fails would *not* be OK.  There could be a latched
+		 * task, and that task could currently belong to another RQ and not
+		 * contribute to rq->nr_running.
+		 */
+		ghost_can_pnt = !!rq->ghost.agent;
+	}
 #endif
 
 	/*
