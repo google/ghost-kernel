@@ -640,14 +640,12 @@ bool ghost_halt_poll(int type)
 	return true;
 }
 
-unsigned long ghost_cfs_added_load(struct rq *rq)
+/* Expected to be called from the ghost_cfs_added_load() wrapper */
+unsigned long __ghost_cfs_added_load(struct rq *rq)
 {
 	int ghost_nr_running;
 	struct task_struct *curr;
 	bool add_load = false;
-
-	if (!static_branch_likely(&ghost_active))
-		return 0;
 
 	/* No ghost tasks; nothing to contribute load. */
 	ghost_nr_running = rq->ghost.ghost_nr_running;

@@ -2212,6 +2212,16 @@ static inline void ghost_prepare_task_switch(struct rq *rq,
 	__ghost_prepare_task_switch(rq, prev, next);
 }
 
+static inline unsigned long ghost_cfs_added_load(struct rq *rq)
+{
+	extern unsigned long __ghost_cfs_added_load(struct rq *rq);
+
+	if (!static_branch_likely(&ghost_active))
+		return 0;
+
+	return __ghost_cfs_added_load(rq);
+}
+
 /* ghost tid */
 typedef int64_t gtid_t;
 
@@ -2383,7 +2393,6 @@ enum {
 };
 bool ghost_halt_poll(int type);
 
-unsigned long ghost_cfs_added_load(struct rq *rq);
 int64_t ghost_alloc_gtid(struct task_struct *p);
 /* Returns 0 if this is not a gtid */
 uint64_t gtid_seqnum(gtid_t gtid);
