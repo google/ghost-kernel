@@ -4078,6 +4078,22 @@ enum bpf_func_id {
  *		'args' points to struct bpf_sync_commit_args.
  *
  *	Return
+ *		0 on success, < 0 on error
+ *
+ * long bpf_ghost_get_affinity(s64 gtid, u8 *mask, u32 size)
+ *	Description
+ *		Copies the gtid's cpu_mask (a.k.a. cpus_allowed) into mask.
+ *
+ *	Return
+ *		Number of valid cpu bits in the mask (a.k.a. nr_cpu_ids), < 0 on
+ *		error.  If the user-provided mask is smaller than the cpu_mask,
+ *		returns -E2BIG.
+ *
+ * long bpf_ghost_get_comm(s64 gtid, char *buf, u32 size)
+ *	Description
+ *		Copies up to size bytes of the gtid's comm into buf.
+ *
+ *	Return
  *		0 on success, < 0 on error.
  */
 enum {
@@ -4087,6 +4103,8 @@ enum {
 	BPF_FUNC_ghost_resched_cpu,
 	BPF_FUNC_ghost_resched_cpu2,
 	BPF_FUNC_ghost_sync_commit,
+	BPF_FUNC_ghost_get_affinity,
+	BPF_FUNC_ghost_get_comm,
 	__BPF_FUNC_GHOST_MAX_ID,
 };
 

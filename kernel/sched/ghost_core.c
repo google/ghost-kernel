@@ -1354,6 +1354,72 @@ static const struct bpf_func_proto bpf_ghost_resched_cpu2_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_3(bpf_ghost_get_affinity, s64, gtid, u8 *, mask, u32, size)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	BUILD_BUG_ON(BPF_FUNC_ghost_get_affinity != 3005);
+
+	e = get_target_enclave();
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	if (!e->abi->bpf_get_affinity)
+		return -ENOSYS;
+
+	return e->abi->bpf_get_affinity(gtid, mask, size);
+}
+
+static const struct bpf_func_proto bpf_ghost_get_affinity_proto = {
+	.func		= bpf_ghost_get_affinity,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	/*
+	 * The verifier enforces that the arg pointer (arg2) is at least size
+	 * bytes (arg3), and it is our job to ensure all bytes are set.
+	 */
+	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+};
+
+BPF_CALL_3(bpf_ghost_get_comm, s64, gtid, char *, buf, u32, size)
+{
+	struct ghost_enclave *e;
+
+	VM_BUG_ON(preemptible());
+
+	BUILD_BUG_ON(BPF_FUNC_ghost_get_comm != 3006);
+
+	e = get_target_enclave();
+
+	/* Paranoia: this is not expected */
+	if (WARN_ON_ONCE(!e))
+		return -ENODEV;
+
+	if (!e->abi->bpf_get_comm)
+		return -ENOSYS;
+
+	return e->abi->bpf_get_comm(gtid, buf, size);
+}
+
+static const struct bpf_func_proto bpf_ghost_get_comm_proto = {
+	.func		= bpf_ghost_get_comm,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	/*
+	 * The verifier enforces that the arg pointer (arg2) is at least size
+	 * bytes (arg3), and it is our job to ensure all bytes are set.
+	 */
+	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+};
+
 /*
  * Each ghost BPF program type can only be attached at a single point, so we can
  * use the same func_proto for all program types and switch on the expected
@@ -1387,6 +1453,10 @@ ghost_bpf_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		 * checked in.
 		 */
 		return NULL;
+	case BPF_FUNC_ghost_get_affinity:
+		return &bpf_ghost_get_affinity_proto;
+	case BPF_FUNC_ghost_get_comm:
+		return &bpf_ghost_get_comm_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

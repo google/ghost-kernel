@@ -8741,6 +8741,72 @@ static int bpf_resched_cpu2(int cpu, int flags)
 	return 0;
 }
 
+static int bpf_get_affinity(gtid_t gtid, u8 *mask, u32 size)
+{
+	struct task_struct *p;
+	size_t nr_bytes;
+	int err;
+
+	rcu_read_lock();
+	p = find_task_by_gtid(gtid);
+	if (!p) {
+		rcu_read_unlock();
+		err = -ENOENT;
+		goto err_clear;
+	}
+
+	/* cpumask_copy() is essentially a memcpy of nr_cpumask_bits */
+	nr_bytes = BITS_TO_BYTES(nr_cpumask_bits);
+	if (nr_bytes > size) {
+		rcu_read_unlock();
+		err = -E2BIG;
+		goto err_clear;
+	}
+	/*
+	 * Note this is a racy read.  It's up to our caller to provide
+	 * synchronization or to deal with concurrent modifications.  Typically,
+	 * the caller will be from bpf-msg which often holds the pi_lock
+	 * already (part of task_rq_lock()), and sched_getaffinity() grabs the
+	 * pi_lock.
+	 */
+	memcpy(mask, cpumask_bits(p->cpus_ptr), nr_bytes);
+	memset(mask + nr_bytes, 0, size - nr_bytes);
+	rcu_read_unlock();
+
+	/*
+	 * Recall that nr_cpu_ids is the number of valid bits in the mask, i.e.
+	 * you shouldn't look at the bits in the mask beyond nr_cpu_ids.  If
+	 * !CONFIG_CPUMASK_OFFSTACK, nr_cpumask_bits is NR_CPUS, which may be
+	 * more than nr_cpu_ids.
+	 */
+	return nr_cpu_ids;
+
+err_clear:
+	memset(mask, 0, size);
+	return err;
+}
+
+static int bpf_get_comm(gtid_t gtid, char *buf, u32 size)
+{
+	struct task_struct *p;
+	char comm[TASK_COMM_LEN];
+
+	rcu_read_lock();
+	p = find_task_by_gtid(gtid);
+	if (!p) {
+		rcu_read_unlock();
+		goto err_clear;
+	}
+	get_task_comm(comm, p);
+	rcu_read_unlock();
+	strscpy_pad(buf, comm, size);
+	return 0;
+
+err_clear:
+	memset(buf, 0, size);
+	return -ENOENT;
+}
+
 static bool ghost_sched_is_valid_access(int off, int size,
 					enum bpf_access_type type,
 					const struct bpf_prog *prog,
@@ -9173,6 +9239,8 @@ DEFINE_GHOST_ABI(current_abi) = {
 	.bpf_wake_agent = bpf_wake_agent,
 	.bpf_run_gtid = bpf_run_gtid,
 	.bpf_resched_cpu2 = bpf_resched_cpu2,
+	.bpf_get_affinity = bpf_get_affinity,
+	.bpf_get_comm = bpf_get_comm,
 	.ghost_sched_is_valid_access = ghost_sched_is_valid_access,
 	.ghost_msg_is_valid_access = ghost_msg_is_valid_access,
 	.ghost_select_rq_is_valid_access = ghost_select_rq_is_valid_access,

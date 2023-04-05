@@ -2270,6 +2270,8 @@ struct ghost_abi {
 	int (*bpf_run_gtid)(s64 gtid, u32 task_barrier, int run_flags, int cpu);
 	int (*bpf_resched_cpu)(int cpu, u64 seqnum); /* DEPRECATED as of ABI 79. */
 	int (*bpf_resched_cpu2)(int cpu, int flags);
+	int (*bpf_get_affinity)(s64 gtid, u8 *mask, u32 size);
+	int (*bpf_get_comm)(s64 gtid, char *buf, u32 size);
 	bool (*ghost_sched_is_valid_access)(int off, int size,
 					    enum bpf_access_type type,
 					    const struct bpf_prog *prog,
