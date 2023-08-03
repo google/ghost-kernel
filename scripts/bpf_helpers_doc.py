@@ -457,6 +457,7 @@ class PrinterHelpers(Printer):
             'struct inode',
             'struct socket',
             'struct file',
+            'struct bpf_dynptr_kernel',
     ]
     known_types = {
             '...',
@@ -505,6 +506,9 @@ class PrinterHelpers(Printer):
             'struct inode',
             'struct socket',
             'struct file',
+            # TODO: v5.11 OSS - add this to make bpf_helper happy, but this is
+            # not backported yet.
+            'struct bpf_dynptr_kernel',
     }
     mapped_types = {
             'u8': '__u8',

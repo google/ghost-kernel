@@ -4071,6 +4071,14 @@ enum bpf_func_id {
  *
  *	Return
  *		0 on success, < 0 on error.
+ *
+ * long bpf_ghost_sync_commit(struct bpf_dynptr_kernel *args)
+ *	Description
+ *		Helper to perform a sync commit.
+ *		'args' points to struct bpf_sync_commit_args.
+ *
+ *	Return
+ *		0 on success, < 0 on error.
  */
 enum {
 	__BPF_FUNC_GHOST_BASE = 3000,
@@ -4078,6 +4086,7 @@ enum {
 	BPF_FUNC_ghost_run_gtid,
 	BPF_FUNC_ghost_resched_cpu,
 	BPF_FUNC_ghost_resched_cpu2,
+	BPF_FUNC_ghost_sync_commit,
 	__BPF_FUNC_GHOST_MAX_ID,
 };
 

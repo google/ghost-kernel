@@ -20,6 +20,7 @@
 #include <linux/kvm_host.h>
 #include <linux/moduleparam.h>
 #include <linux/cpuset.h>
+#include <linux/bpf.h>
 #include <uapi/linux/sched/types.h>
 #include <linux/file.h>
 #ifdef CONFIG_X86_64
@@ -324,7 +325,7 @@ static void ghost_bpf_pnt(struct ghost_enclave *e, struct rq *rq,
 	save_prog_state(&old_state);
 	ps = get_prog_state();
 	ps->prog_type = BPF_PROG_TYPE_GHOST_SCHED;
-	/* ghost_run_gtid() may unlock the RQ lock. */
+	/* ghost_run_gtid() or bpf_sync_commit() may unlock the RQ lock. */
 	ps->bpf_pnt.rf = rf;
 	BPF_PROG_RUN(prog, ctx);
 	restore_prog_state(&old_state);
@@ -5918,7 +5919,7 @@ static inline bool ghost_claim_txn(int cpu, int where)
 }
 
 static inline bool txn_commit_allowed(struct rq *rq, gtid_t gtid, bool sync,
-				      int this_cpu)
+				      int this_cpu, bool bpf)
 {
 	/*
 	 * Asynchronous commit is instigated by kernel and thus always
@@ -5930,8 +5931,10 @@ static inline bool txn_commit_allowed(struct rq *rq, gtid_t gtid, bool sync,
 	/*
 	 * An agent is always allowed to commit synchronously within the
 	 * confines of its enclave.
+	 *
+	 * We treat a BPF program similar to as if it were an agent.
 	 */
-	if (current->ghost.agent)
+	if (bpf || current->ghost.agent)
 		return check_same_enclave(this_cpu, cpu_of(rq));
 
 	/*
@@ -6031,7 +6034,8 @@ static void ghost_set_txn_state(int cpu, enum ghost_txn_state state)
  * and finalizing it (after this function returns).
  */
 static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
-			      int *commit_state, bool *need_rendezvous)
+			      int *commit_state, bool *need_rendezvous,
+			      bool bpf)
 {
 	gtid_t gtid;
 	struct rq *rq = NULL;
@@ -6183,7 +6187,7 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		goto out;
 	}
 
-	if (unlikely(!txn_commit_allowed(rq, gtid, sync, this_cpu))) {
+	if (unlikely(!txn_commit_allowed(rq, gtid, sync, this_cpu, bpf))) {
 		state = GHOST_TXN_NOT_PERMITTED;
 		goto out;
 	}
@@ -6208,7 +6212,13 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		goto out;
 	}
 
-	local_run = blocking_run(rq, sync, gtid);
+	/*
+	 * "blocking" doesn't make sense in the context of a BPF-driven
+	 * commit. Also, checks like is_agent() don't make sense in BPF
+	 * context.
+	 */
+	local_run = bpf ? false : blocking_run(rq, sync, gtid);
+
 	if (local_run) {
 		/*
 		 * Agent is doing a synchronous commit on its local cpu and
@@ -6227,7 +6237,8 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 		}
 	} else {
 		/*
-		 * We do not assert a barrier match for the remote run case:
+		 * We do not assert a barrier match for the remote run or bpf
+		 * case:
 		 *
 		 * In a remote run case we validate that that task_barrier
 		 * is up-to-date (i.e. we have consumed the latest message for
@@ -6244,6 +6255,13 @@ static bool _ghost_commit_txn(int run_cpu, bool sync, int64_t rendezvous,
 	}
 
 	*need_rendezvous = true;
+
+	/*
+	 * Local sync commits with BPF don't need a resched, since they are done
+	 * from PNT. But they don't hurt either, since __schedule() will clear
+	 * need_resched post PNT. So, allow resched to be set in local BPF commit
+	 * case, in case we ever call this helper outside of PNT in the future.
+	 */
 	resched = ghost_can_schedule(rq, gtid);
 
 	if (next && task_running(rq, next)) {
@@ -6396,7 +6414,7 @@ static bool ghost_commit_txn(int run_cpu, bool sync, int *commit_state)
 	bool resched, need_rendezvous;
 
 	resched = _ghost_commit_txn(run_cpu, sync, GHOST_NO_RENDEZVOUS, &state,
-				    &need_rendezvous);
+				    &need_rendezvous, /*bpf=*/false);
 	if (commit_state)
 		*commit_state = state;
 
@@ -6529,54 +6547,30 @@ static void ghost_reached_rendezvous(int cpu, int64_t target)
 	smp_store_release(&rq->ghost.rendezvous, target);
 }
 
-static int ghost_sync_group(struct ghost_enclave *e,
-			    struct ghost_ioc_commit_txn __user *arg)
+DEFINE_PER_CPU(cpumask_var_t, __sync_group_ipimask);
+DEFINE_PER_CPU(cpumask_var_t, __sync_group_rendmask);
+
+/* Note: called with preemption disabled */
+static int __ghost_sync_group(struct cpumask *cpumask, int flags,
+			      bool *local_resched, bool bpf)
 {
 	int64_t target;
 	bool failed = false;
-	bool local_resched = false;
-	int cpu, this_cpu, error, state;
-	cpumask_var_t cpumask, ipimask, rendmask;
-
-	ulong *user_mask_ptr;
-	uint user_mask_len;
-	int flags;
-	struct ghost_ioc_commit_txn commit_txn;
+	int cpu, this_cpu, state;
+	struct cpumask *ipimask, *rendmask;
 
 	const int valid_flags = 0;
 
-	if (copy_from_user(&commit_txn, arg,
-			   sizeof(struct ghost_ioc_commit_txn)))
-		return -EFAULT;
-
-	user_mask_ptr = commit_txn.mask_ptr;
-	user_mask_len = commit_txn.mask_len;
-	flags = commit_txn.flags;
+	VM_BUG_ON(preemptible());
 
 	if (flags & ~valid_flags)
 		return -EINVAL;
 
-	if (!alloc_cpumask_var(&cpumask, GFP_KERNEL))
-		return -ENOMEM;
+	ipimask = this_cpu_cpumask_var_ptr(__sync_group_ipimask);
+	rendmask = this_cpu_cpumask_var_ptr(__sync_group_rendmask);
+	cpumask_clear(ipimask);
+	cpumask_clear(rendmask);
 
-	error = get_user_cpu_mask(user_mask_ptr, user_mask_len, cpumask);
-	if (error) {
-		free_cpumask_var(cpumask);
-		return error;
-	}
-
-	if (!zalloc_cpumask_var(&ipimask, GFP_KERNEL)) {
-		free_cpumask_var(cpumask);
-		return -ENOMEM;
-	}
-
-	if (!zalloc_cpumask_var(&rendmask, GFP_KERNEL)) {
-		free_cpumask_var(cpumask);
-		free_cpumask_var(ipimask);
-		return -ENOMEM;
-	}
-
-	preempt_disable();
 	this_cpu = raw_smp_processor_id();
 	target = ghost_sync_group_cookie();
 
@@ -6645,7 +6639,7 @@ static int ghost_sync_group(struct ghost_enclave *e,
 		}
 
 		resched = _ghost_commit_txn(cpu, true, -target, &state,
-					    &need_rendezvous);
+					    &need_rendezvous, bpf);
 		if (!ghost_txn_succeeded(state)) {
 			VM_BUG_ON(resched);
 			VM_BUG_ON(need_rendezvous);
@@ -6654,7 +6648,7 @@ static int ghost_sync_group(struct ghost_enclave *e,
 			if (resched) {
 				VM_BUG_ON(!need_rendezvous);
 				if (cpu == this_cpu)
-					local_resched = true;
+					*local_resched = true;
 				else
 					__cpumask_set_cpu(cpu, ipimask);
 			}
@@ -6721,19 +6715,54 @@ static int ghost_sync_group(struct ghost_enclave *e,
 
 	rcu_read_unlock();
 
+	return !failed;
+}
+
+static int ghost_sync_group(struct ghost_enclave *e,
+			    struct ghost_ioc_commit_txn __user *arg)
+{
+	struct ghost_ioc_commit_txn commit_txn;
+	ulong *user_mask_ptr;
+	uint user_mask_len;
+	int flags;
+	int ret;
+	cpumask_var_t cpumask;
+	bool local_resched = false;
+
+	if (!alloc_cpumask_var(&cpumask, GFP_KERNEL))
+		return -ENOMEM;
+
+	if (copy_from_user(&commit_txn, arg,
+			   sizeof(struct ghost_ioc_commit_txn))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	user_mask_ptr = commit_txn.mask_ptr;
+	user_mask_len = commit_txn.mask_len;
+	flags = commit_txn.flags;
+
+	ret = get_user_cpu_mask(user_mask_ptr, user_mask_len, cpumask);
+	if (ret)
+		goto out;
+
+	preempt_disable();
+
+	ret = __ghost_sync_group(cpumask, flags, &local_resched, /*bpf=*/false);
+
 	/* Reschedule (potentially switching to 'latched_task'). */
 	if (local_resched) {
-		WARN_ON_ONCE(failed);
+		WARN_ON_ONCE(ret != 1);
 		ghost_agent_schedule();
 	}
 
 	WARN_ON_ONCE(this_rq()->ghost.blocked_in_run);
 
 	preempt_enable_no_resched();
+
+out:
 	free_cpumask_var(cpumask);
-	free_cpumask_var(ipimask);
-	free_cpumask_var(rendmask);
-	return !failed;
+	return ret;
 }
 
 static int ioctl_ghost_commit_txn(struct ghost_enclave *e,
@@ -8225,8 +8254,12 @@ static void runtime_adjust_dirtabs(void)
 	enc_txn->size = GHOST_CPU_DATA_REGION_SIZE;
 }
 
+DEFINE_PER_CPU(cpumask_var_t, sync_group_cpumask);
+
 static int __init abi_init(const struct ghost_abi *abi)
 {
+	int i;
+
 	/*
 	 * ghost bpf programs encode the ABI they were compiled against
 	 * in the upper 16 bits of 'prog->expected_attach_type' which
@@ -8241,8 +8274,17 @@ static int __init abi_init(const struct ghost_abi *abi)
 		return -EINVAL;
 
 	runtime_adjust_dirtabs();
+
+	for_each_possible_cpu(i) {
+		zalloc_cpumask_var(&per_cpu(__sync_group_ipimask, i), GFP_KERNEL);
+		zalloc_cpumask_var(&per_cpu(__sync_group_rendmask, i), GFP_KERNEL);
+		zalloc_cpumask_var(&per_cpu(sync_group_cpumask, i), GFP_KERNEL);
+	}
+
 	return 0;
 }
+
+/* TODO: import bpf_sync_commit after dynptr backporting */
 
 static int handle_cmdline_args(char *param, char *val, const char *unused,
 			       void *arg)

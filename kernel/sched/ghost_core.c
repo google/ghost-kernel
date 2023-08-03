@@ -1381,6 +1381,12 @@ ghost_bpf_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_ghost_resched_cpu_proto;
 	case BPF_FUNC_ghost_resched_cpu2:
 		return &bpf_ghost_resched_cpu2_proto;
+	case BPF_FUNC_ghost_sync_commit:
+		/*
+		 * TODO: update to return proto once bpf_sync_commit is
+		 * checked in.
+		 */
+		return NULL;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
